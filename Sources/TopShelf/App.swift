@@ -73,6 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var statusItem: NSStatusItem!
     private var globalClickMonitor: Any?
     private var globalClickMask: NSEvent.EventTypeMask = []
+    private var outsideClickDismissal = OutsideClickDismissal()
     private var localKeyMonitor: Any?
     private var hotKey: EventHotKeyRef?
     private var hotKeyHandler: EventHandlerRef?
@@ -209,6 +210,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func updateEventMonitors() {
+        outsideClickDismissal = OutsideClickDismissal()
         if controls.topEdgeEnabled {
             if globalScrollMonitor == nil { setupTopEdge() }
         } else {
@@ -233,14 +235,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     self.dragStartChangeCount = NSPasteboard(name: .drag).changeCount
                 }
                 guard self.isPresented, !self.controls.isPinned, !self.dialogOpen else { return }
-                self.hidePanel()
+                // Finder owns the initial press/drag. Keep the drawer available
+                // until release, and never dismiss a drop landing inside it.
+                let inside = self.panel.frame.contains(NSEvent.mouseLocation)
+                if self.outsideClickDismissal.consume(event.type, insidePanel: inside) {
+                    self.hidePanel()
+                }
             }
         }
     }
 
     static func clickMonitorMask(topEdgeEnabled: Bool, presented: Bool, pinned: Bool) -> NSEvent.EventTypeMask {
         var mask: NSEvent.EventTypeMask = topEdgeEnabled ? [.leftMouseDown] : []
-        if presented && !pinned { mask.formUnion([.leftMouseDown, .rightMouseDown]) }
+        if presented && !pinned { mask.formUnion([.leftMouseDown, .leftMouseUp, .rightMouseDown]) }
         return mask
     }
 

@@ -5,6 +5,42 @@ import AppKit
 final class DrawerTests: XCTestCase {
     let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
 
+    func testFinderDragIntoDrawerDoesNotDismissOnPressOrDrop() {
+        var dismissal = OutsideClickDismissal()
+        XCTAssertFalse(dismissal.consume(.leftMouseDown, insidePanel: false))
+        XCTAssertFalse(dismissal.consume(.leftMouseDragged, insidePanel: false))
+        XCTAssertFalse(dismissal.consume(.leftMouseDragged, insidePanel: true))
+        XCTAssertFalse(dismissal.consume(.leftMouseUp, insidePanel: true))
+        XCTAssertFalse(dismissal.consume(.leftMouseUp, insidePanel: false))
+    }
+
+    func testOrdinaryOutsideClickDismissesOnlyOnRelease() {
+        var dismissal = OutsideClickDismissal()
+        XCTAssertFalse(dismissal.consume(.leftMouseDown, insidePanel: false))
+        XCTAssertTrue(dismissal.consume(.leftMouseUp, insidePanel: false))
+        XCTAssertFalse(dismissal.consume(.leftMouseUp, insidePanel: false))
+        XCTAssertTrue(dismissal.consume(.rightMouseDown, insidePanel: false))
+    }
+
+    func testPressInsideOrUnpairedReleaseDoesNotDismiss() {
+        var dismissal = OutsideClickDismissal()
+        XCTAssertFalse(dismissal.consume(.leftMouseUp, insidePanel: false))
+        XCTAssertFalse(dismissal.consume(.leftMouseDown, insidePanel: true))
+        XCTAssertFalse(dismissal.consume(.leftMouseUp, insidePanel: false))
+        XCTAssertFalse(dismissal.consume(.rightMouseDown, insidePanel: true))
+    }
+
+    @MainActor
+    func testReleaseMonitoringOnlyWhileUnpinnedDrawerIsOpen() {
+        for topEdge in [false, true] {
+            let open = AppDelegate.clickMonitorMask(topEdgeEnabled: topEdge, presented: true, pinned: false)
+            XCTAssertTrue(open.contains(.leftMouseDown))
+            XCTAssertTrue(open.contains(.leftMouseUp))
+            XCTAssertFalse(AppDelegate.clickMonitorMask(topEdgeEnabled: topEdge, presented: false, pinned: false).contains(.leftMouseUp))
+            XCTAssertFalse(AppDelegate.clickMonitorMask(topEdgeEnabled: topEdge, presented: true, pinned: true).contains(.leftMouseUp))
+        }
+    }
+
     func testPhysicalDownWithNaturalTrackpadAndConventionalWheel() {
         var trackpad = TopEdgeGesture()
         XCTAssertNil(trackpad.consume(deltaY: 3, inverted: true, precise: true, momentum: false, screen: screen, time: 1))

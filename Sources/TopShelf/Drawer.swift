@@ -1,6 +1,28 @@
 import AppKit
 import QuartzCore
 
+/// An outside press may become a drag into the drawer. Decide only on release.
+struct OutsideClickDismissal {
+    private var waitingForLeftRelease = false
+
+    mutating func consume(_ type: NSEvent.EventType, insidePanel: Bool) -> Bool {
+        switch type {
+        case .leftMouseDown:
+            waitingForLeftRelease = !insidePanel
+            return false
+        case .leftMouseUp:
+            let dismiss = waitingForLeftRelease && !insidePanel
+            waitingForLeftRelease = false
+            return dismiss
+        case .rightMouseDown:
+            waitingForLeftRelease = false
+            return !insidePanel
+        default:
+            return false
+        }
+    }
+}
+
 enum DrawerGestureIntent: Equatable { case open, close }
 
 struct TopEdgeGesture {
