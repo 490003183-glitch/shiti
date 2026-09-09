@@ -20,6 +20,51 @@ struct ShelfShortcut: Identifiable, Codable, Equatable {
     var path: String
     var bookmark: Data?
     var isDirectory: Bool
+    var position: ShortcutPosition?
+}
+
+struct ShortcutPosition: Codable, Equatable {
+    var x: Double
+    var y: Double
+    var point: CGPoint { CGPoint(x: x, y: y) }
+    var isValid: Bool { x.isFinite && y.isFinite && x >= 0 && y >= 0 && x <= 100_000 && y <= 100_000 }
+}
+
+enum ShortcutLayout {
+    static let tileSize = CGSize(width: 192, height: 48)
+    static let grid: CGFloat = 16
+
+    static func frame(at position: ShortcutPosition) -> CGRect {
+        CGRect(origin: position.point, size: tileSize)
+    }
+
+    static func availablePosition(near point: CGPoint, occupied: [ShortcutPosition]) -> ShortcutPosition {
+        var position = ShortcutPosition(x: Double(max(0, (point.x / grid).rounded() * grid)),
+                                        y: Double(max(0, (point.y / grid).rounded() * grid)))
+        // Leave a small gap and keep existing buttons where the user put them.
+        while occupied.contains(where: { frame(at: $0).insetBy(dx: -4, dy: -4).intersects(frame(at: position)) }) {
+            position.y += Double(tileSize.height + grid)
+        }
+        return position
+    }
+
+    static func positions(for shortcuts: [ShelfShortcut], width: CGFloat) -> [UUID: ShortcutPosition] {
+        var result = Dictionary(uniqueKeysWithValues: shortcuts.compactMap { shortcut in
+            shortcut.position.map { (shortcut.id, $0) }
+        })
+        let columns = max(1, Int((max(width, tileSize.width) + grid) / (tileSize.width + grid)))
+        var slot = 0
+        for shortcut in shortcuts where shortcut.position == nil {
+            var candidate: ShortcutPosition
+            repeat {
+                candidate = ShortcutPosition(x: Double(slot % columns) * Double(tileSize.width + grid),
+                                             y: Double(slot / columns) * Double(tileSize.height + grid))
+                slot += 1
+            } while result.values.contains(where: { frame(at: $0).insetBy(dx: -4, dy: -4).intersects(frame(at: candidate)) })
+            result[shortcut.id] = candidate
+        }
+        return result
+    }
 }
 
 struct ShelfNote: Identifiable, Codable, Equatable {
@@ -60,7 +105,7 @@ enum ShelfDisk {
         }
         guard Set(snapshot.notes.map(\.id)).count == snapshot.notes.count,
               Set(snapshot.shortcuts.map(\.id)).count == snapshot.shortcuts.count,
-              snapshot.shortcuts.allSatisfy({ !$0.name.isEmpty && $0.path.hasPrefix("/") }) else {
+              snapshot.shortcuts.allSatisfy({ !$0.name.isEmpty && $0.path.hasPrefix("/") && ($0.position?.isValid ?? true) }) else {
             throw NSError(domain: "TopShelf", code: 2,
                           userInfo: [NSLocalizedDescriptionKey: "索引结构不正确，原有数据未被改写。"])
         }
@@ -271,6 +316,22 @@ final class ShelfStore: ObservableObject {
         saveNow()
     }
 
+    func moveShortcut(_ id: UUID, to point: CGPoint, canvasWidth: CGFloat) {
+        guard canWrite, shortcuts.contains(where: { $0.id == id }),
+              point.x.isFinite, point.y.isFinite, canvasWidth.isFinite else { return }
+        var positions = ShortcutLayout.positions(for: shortcuts, width: canvasWidth)
+        let occupied = positions.filter { $0.key != id }.map(\.value)
+        let position = ShortcutLayout.availablePosition(near: point, occupied: occupied)
+        guard position.isValid else { return }
+        positions[id] = position
+        for index in shortcuts.indices {
+            if let saved = positions[shortcuts[index].id], shortcuts[index].position != saved {
+                shortcuts[index].position = saved
+            }
+        }
+        saveNow()
+    }
+
     func relinkShortcut(_ shortcut: ShelfShortcut, to url: URL) {
         guard canWrite, let index = shortcuts.firstIndex(where: { $0.id == shortcut.id }) else { return }
         do {
@@ -280,7 +341,8 @@ final class ShelfStore: ObservableObject {
             let values = try url.resourceValues(forKeys: [.isDirectoryKey])
             let bookmark = try makeBookmark(for: url)
             shortcuts[index] = ShelfShortcut(id: shortcut.id, name: url.lastPathComponent.isEmpty ? url.path : url.lastPathComponent,
-                                             path: url.path, bookmark: bookmark, isDirectory: values.isDirectory == true)
+                                             path: url.path, bookmark: bookmark, isDirectory: values.isDirectory == true,
+                                             position: shortcuts[index].position)
 #if APP_STORE
             shortcutAccess[shortcut.id] = nil
 #endif

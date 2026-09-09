@@ -2,6 +2,78 @@ import XCTest
 @testable import TopShelf
 
 final class StoreTests: XCTestCase {
+    func testLegacyShortcutsLoadWithoutPositionsAndUseFreeSlots() throws {
+        let id = UUID()
+        let data = Data("{\"id\":\"\(id.uuidString)\",\"name\":\"旧入口\",\"path\":\"/tmp/example\",\"isDirectory\":true}".utf8)
+        let old = try JSONDecoder().decode(ShelfShortcut.self, from: data)
+        XCTAssertNil(old.position)
+        let fixed = ShelfShortcut(name: "已摆放", path: "/tmp/fixed", isDirectory: true,
+                                  position: ShortcutPosition(x: 0, y: 0))
+        let layout = ShortcutLayout.positions(for: [old, fixed], width: 600)
+        XCTAssertEqual(layout[fixed.id], fixed.position)
+        XCTAssertEqual(layout[old.id], ShortcutPosition(x: 208, y: 0))
+        let narrow = ShortcutLayout.positions(for: [fixed], width: 200)
+        XCTAssertEqual(narrow[fixed.id], fixed.position)
+    }
+
+    func testHiddenGridSnapsWithoutOverlappingOrGoingNegative() {
+        let empty = ShortcutLayout.availablePosition(near: CGPoint(x: 101, y: 83), occupied: [])
+        XCTAssertEqual(empty, ShortcutPosition(x: 96, y: 80))
+        XCTAssertEqual(ShortcutLayout.availablePosition(near: CGPoint(x: -100, y: -10), occupied: []),
+                       ShortcutPosition(x: 0, y: 0))
+        let other = ShortcutPosition(x: 96, y: 80)
+        let result = ShortcutLayout.availablePosition(near: other.point, occupied: [other])
+        XCTAssertFalse(ShortcutLayout.frame(at: result).intersects(ShortcutLayout.frame(at: other)))
+        XCTAssertEqual(result.x, 96)
+    }
+
+    @MainActor
+    func testArrangementSurvivesRestartRelinkAndAddingAnotherShortcut() throws {
+        let base = try temporaryDirectory()
+        let targets = ["甲", "乙", "丙"].map { base.appendingPathComponent($0) }
+        for url in targets { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
+        let root = base.appendingPathComponent("data")
+        let store = ShelfStore(root: root)
+        store.addNote()
+        let noteID = try XCTUnwrap(store.selectedNoteID)
+        store.updateNote(noteID, text: "便签不能因排列改变")
+        store.addShortcuts(Array(targets.prefix(2)))
+        let first = store.shortcuts[0].id
+        let second = store.shortcuts[1].id
+        store.moveShortcut(first, to: CGPoint(x: 325, y: 203), canvasWidth: 700)
+        let restored = ShelfStore(root: root)
+        let arranged = ShortcutPosition(x: 320, y: 208)
+        XCTAssertEqual(restored.shortcuts.first?.position, arranged)
+        XCTAssertEqual(restored.shortcuts[1].position, ShortcutPosition(x: 208, y: 0))
+        XCTAssertEqual(restored.notes.first?.text, "便签不能因排列改变")
+        restored.relinkShortcut(restored.shortcuts[0], to: targets[2])
+        XCTAssertEqual(restored.shortcuts[0].position, arranged)
+        restored.addShortcuts([targets[0]])
+        let layout = ShortcutLayout.positions(for: restored.shortcuts, width: 350)
+        XCTAssertEqual(layout[first], arranged)
+        XCTAssertEqual(layout[second], ShortcutPosition(x: 208, y: 0))
+        XCTAssertEqual(layout[restored.shortcuts[2].id], ShortcutPosition(x: 0, y: 0))
+        XCTAssertEqual(ShelfStore(root: root).shortcuts[0].position, arranged)
+        XCTAssertTrue(targets.allSatisfy { FileManager.default.fileExists(atPath: $0.path) })
+    }
+
+    @MainActor
+    func testUnchangedMoveDoesNotRewriteFileAndInvalidCoordinatesAreIgnored() throws {
+        let base = try temporaryDirectory()
+        let target = base.appendingPathComponent("folder")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let store = ShelfStore(root: base.appendingPathComponent("data"))
+        store.addShortcuts([target])
+        let id = store.shortcuts[0].id
+        store.moveShortcut(id, to: CGPoint(x: 32, y: 64), canvasWidth: 600)
+        let file = store.root.appendingPathComponent("shelf.json")
+        let sentinel = Date(timeIntervalSince1970: 1_600_000_000)
+        try FileManager.default.setAttributes([.modificationDate: sentinel], ofItemAtPath: file.path)
+        store.moveShortcut(id, to: CGPoint(x: 32, y: 64), canvasWidth: 600)
+        store.moveShortcut(id, to: CGPoint(x: CGFloat.nan, y: 64), canvasWidth: 600)
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: file.path)[.modificationDate] as? Date, sentinel)
+    }
+
     func testTitlePreservesBlankLinesUnicodeAndTruncation() {
         let titles = ["", "\n\r\n", "\n\r\n标题\n正文", " \n正文",
                       String(repeating: "👨‍👩‍👧‍👦", count: 90),

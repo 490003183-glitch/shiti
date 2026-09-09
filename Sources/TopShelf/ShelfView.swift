@@ -15,9 +15,6 @@ struct ShelfView: View {
     @State private var pendingNoteRemoval: ShelfNote?
     @FocusState private var editorFocused: Bool
 
-    private var visibleShortcuts: [ShelfShortcut] {
-        store.shortcuts.filter { fileSearch.isEmpty || $0.name.localizedStandardContains(fileSearch) }
-    }
     private var visibleNotes: [ShelfNote] {
         store.notes.filter { noteSearch.isEmpty || $0.text.localizedStandardContains(noteSearch) }
     }
@@ -104,23 +101,7 @@ struct ShelfView: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }.buttonStyle(.plain)
                 } else {
-                    ScrollView {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 160, maximum: 260))], alignment: .leading, spacing: 8) {
-                            ForEach(visibleShortcuts) { shortcut in
-                                ShortcutTile(shortcut: shortcut, open: { store.openShortcut(shortcut) })
-                                    .contextMenu {
-                                        Button(shortcut.isDirectory ? "打开文件夹" : "打开文件") { store.openShortcut(shortcut) }
-                                        Button("在 Finder 中显示") { store.openShortcut(shortcut, reveal: true) }
-                                        Button("重新选择目标…") { relink(shortcut) }
-                                        Divider()
-                                        Button("移除快捷按钮") { store.removeShortcut(shortcut) }
-                                    }
-                            }
-                        }.padding(2)
-                        if visibleShortcuts.isEmpty {
-                            Text("没有匹配的快捷按钮").font(.system(size: 12)).foregroundStyle(.secondary).padding(25)
-                        }
-                    }
+                    ShortcutCanvas(store: store, search: fileSearch, relink: relink)
                 }
             }
             .onDrop(of: [UTType.fileURL], isTargeted: $dropTarget, perform: receiveFiles)
@@ -262,10 +243,55 @@ private final class URLCollector: @unchecked Sendable {
     func values() -> [URL] { lock.lock(); defer { lock.unlock() }; return urls }
 }
 
+private struct ShortcutCanvas: View {
+    @ObservedObject var store: ShelfStore
+    let search: String
+    let relink: (ShelfShortcut) -> Void
+
+    var body: some View {
+        GeometryReader { geometry in
+            let positions = ShortcutLayout.positions(for: store.shortcuts, width: geometry.size.width - 4)
+            let visible = store.shortcuts.filter { search.isEmpty || $0.name.localizedStandardContains(search) }
+            let width = max(geometry.size.width - 4, (positions.values.map { $0.x }.max() ?? 0) + ShortcutLayout.tileSize.width)
+            let height = max(geometry.size.height - 4, (positions.values.map { $0.y }.max() ?? 0) + ShortcutLayout.tileSize.height + 64)
+            ScrollView([.horizontal, .vertical]) {
+                ZStack(alignment: .topLeading) {
+                    ForEach(visible) { shortcut in
+                        if let origin = positions[shortcut.id] {
+                            ShortcutTile(shortcut: shortcut, open: { store.openShortcut(shortcut) }, move: { translation in
+                                store.moveShortcut(shortcut.id,
+                                                   to: CGPoint(x: origin.x + translation.width, y: origin.y + translation.height),
+                                                   canvasWidth: geometry.size.width - 4)
+                            }, canMove: store.canWrite)
+                            .frame(width: ShortcutLayout.tileSize.width, height: ShortcutLayout.tileSize.height)
+                            .contextMenu {
+                                Button(shortcut.isDirectory ? "打开文件夹" : "打开文件") { store.openShortcut(shortcut) }
+                                Button("在 Finder 中显示") { store.openShortcut(shortcut, reveal: true) }
+                                Button("重新选择目标…") { relink(shortcut) }
+                                Divider()
+                                Button("移除快捷按钮") { store.removeShortcut(shortcut) }
+                            }
+                            .offset(x: origin.x, y: origin.y)
+                        }
+                    }
+                }.frame(width: width, height: height, alignment: .topLeading).padding(2)
+            }
+            .overlay {
+                if visible.isEmpty {
+                    Text("没有匹配的快捷按钮").font(.system(size: 12)).foregroundStyle(.secondary).allowsHitTesting(false)
+                }
+            }
+        }
+    }
+}
+
 private struct ShortcutTile: View {
     let shortcut: ShelfShortcut
     let open: () -> Void
+    let move: (CGSize) -> Void
+    let canMove: Bool
     @State private var hovered = false
+    @GestureState private var translation = CGSize.zero
 
     var body: some View {
         Button(action: open) {
@@ -281,7 +307,14 @@ private struct ShortcutTile: View {
                 .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(accent.opacity(hovered ? 0.35 : 0.08)))
                 .contentShape(RoundedRectangle(cornerRadius: 10))
         }.buttonStyle(.plain).onHover { hovered = $0 }
-            .help(shortcut.path + "\n单击打开 · 右键管理")
+            .highPriorityGesture(DragGesture(minimumDistance: 5)
+                .updating($translation) { value, state, _ in
+                    if canMove { state = value.translation }
+                }
+                .onEnded { value in if canMove { move(value.translation) } })
+            .offset(translation)
+            .zIndex(translation == .zero ? 0 : 1)
+            .help(shortcut.path + "\n单击打开 · 拖动排列 · 右键管理")
             .accessibilityLabel(shortcut.name)
             .accessibilityHint(shortcut.isDirectory ? "在 Finder 中打开文件夹" : "使用默认应用打开文件")
     }
