@@ -9,7 +9,6 @@ struct ShelfView: View {
     @ObservedObject var controls: ShelfControls
     @State private var fileSearch = ""
     @State private var noteSearch = ""
-    @State private var dropTarget = false
     @State private var showFileSearch = false
     @State private var showNoteSearch = false
     @State private var pendingNoteRemoval: ShelfNote?
@@ -65,6 +64,8 @@ struct ShelfView: View {
                     Button("删除便签…") { pendingNoteRemoval = note }
                     Divider()
                 }
+                Button("备份与恢复…") { controls.showBackups() }
+                if let warning = store.backupWarning { Text(warning) }
                 Button("打开本地数据文件夹") { NSWorkspace.shared.open(store.root) }
                 Divider()
                 Text("快捷键：⌃⌥空格")
@@ -89,22 +90,8 @@ struct ShelfView: View {
                 Button { controls.chooseFiles() } label: { Image(systemName: "plus").frame(width: 24, height: 24) }
                     .buttonStyle(.plain).help("添加快捷访问").disabled(!store.canWrite)
             }.frame(height: 28)
-            ZStack {
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(accent.opacity(dropTarget ? 0.10 : 0))
-                RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(accent.opacity(dropTarget ? 0.7 : 0), lineWidth: 1)
-                if store.shortcuts.isEmpty {
-                    Button { controls.chooseFiles() } label: {
-                        Text(dropTarget ? "松手添加" : "拖入文件夹或文件")
-                            .font(.system(size: 13)).foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }.buttonStyle(.plain)
-                } else {
-                    ShortcutCanvas(store: store, search: fileSearch, relink: relink)
-                }
-            }
-            .onDrop(of: [UTType.fileURL], isTargeted: $dropTarget, perform: receiveFiles)
+            ShortcutCanvas(store: store, search: fileSearch, relink: relink,
+                           chooseFiles: controls.chooseFiles, beginInteraction: controls.beginShortcutInteraction)
         }.padding(16)
     }
 
@@ -174,7 +161,7 @@ struct ShelfView: View {
                                     set: { store.updateNote(noteID, text: $0) }))
                                     .font(.system(size: 14)).lineSpacing(6)
                                     .scrollContentBackground(.hidden).focused($editorFocused)
-                                    .id(note.id).disabled(!store.canWrite)
+                                    .id("\(note.id)-\(store.editorRevision)").disabled(!store.canWrite)
                             }
                         }.frame(maxWidth: .infinity)
                     } else {
@@ -202,27 +189,6 @@ struct ShelfView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { editorFocused = true }
     }
 
-    private func receiveFiles(_ providers: [NSItemProvider]) -> Bool {
-        guard store.canWrite else { return false }
-        let group = DispatchGroup()
-        let collector = URLCollector()
-        for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-            group.enter()
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                defer { group.leave() }
-                if let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) { collector.append(url) }
-                else if let url = item as? URL { collector.append(url) }
-                else if let string = item as? String, let url = URL(string: string) { collector.append(url) }
-            }
-        }
-        group.notify(queue: .main) {
-            let urls = collector.values()
-            if urls.isEmpty { store.errorMessage = "没有读取到目标路径，请使用“添加快捷访问”选择文件或文件夹。" }
-            else { store.addShortcuts(urls) }
-        }
-        return true
-    }
-
     private func exportNote(_ note: ShelfNote) {
         let dialog = NSSavePanel()
         dialog.allowedContentTypes = [.plainText]
@@ -237,16 +203,77 @@ struct ShelfView: View {
 }
 
 private final class URLCollector: @unchecked Sendable {
-    private var urls: [URL] = []
+    private var urls: [Int: URL] = [:]
     private let lock = NSLock()
-    func append(_ url: URL) { lock.lock(); defer { lock.unlock() }; urls.append(url) }
-    func values() -> [URL] { lock.lock(); defer { lock.unlock() }; return urls }
+    func append(_ url: URL, index: Int) { lock.lock(); defer { lock.unlock() }; urls[index] = url }
+    func values() -> [URL] { lock.lock(); defer { lock.unlock() }; return urls.sorted { $0.key < $1.key }.map(\.value) }
+}
+
+private struct ShortcutFileDrop: DropDelegate {
+    let enabled: Bool
+    @Binding var active: Bool
+    let update: (CGPoint?) -> Void
+    let receive: ([NSItemProvider], CGPoint) -> Bool
+    func validateDrop(info: DropInfo) -> Bool { enabled && info.hasItemsConforming(to: [UTType.fileURL]) }
+    func dropEntered(info: DropInfo) {
+        active = enabled
+        if enabled { update(info.location) }
+    }
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        guard enabled else { return DropProposal(operation: .forbidden) }
+        if active { update(info.location) }
+        return DropProposal(operation: .copy)
+    }
+    func dropExited(info: DropInfo) { active = false; update(nil) }
+    func performDrop(info: DropInfo) -> Bool {
+        active = false
+        update(nil)
+        return enabled && receive(info.itemProviders(for: [UTType.fileURL]), info.location)
+    }
 }
 
 private struct ShortcutCanvas: View {
     @ObservedObject var store: ShelfStore
     let search: String
     let relink: (ShelfShortcut) -> Void
+    let chooseFiles: () -> Void
+    let beginInteraction: () -> Void
+    @State private var dropPreview: ShortcutPosition?
+    @State private var externalDropActive = false
+    @State private var dragPreview: ShortcutPosition?
+    @State private var draggingID: UUID?
+
+    private func dropOrigin(_ location: CGPoint) -> CGPoint {
+        CGPoint(x: location.x - 2 - ShortcutLayout.tileSize.width / 2,
+                y: location.y - 2 - ShortcutLayout.tileSize.height / 2)
+    }
+
+    private func receive(_ providers: [NSItemProvider], at point: CGPoint, width: CGFloat) -> Bool {
+        guard store.canWrite, !providers.isEmpty else { return false }
+        let group = DispatchGroup()
+        let collector = URLCollector()
+        let revision = store.editorRevision
+        for (index, provider) in providers.enumerated() {
+            group.enter()
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                defer { group.leave() }
+                let url: URL?
+                if let data = item as? Data { url = URL(dataRepresentation: data, relativeTo: nil) }
+                else if let value = item as? URL { url = value }
+                else if let string = item as? String { url = URL(string: string) }
+                else { url = nil }
+                if let url { collector.append(url, index: index) }
+            }
+        }
+        group.notify(queue: .main) {
+            // Do not append an old in-flight drop after a backup has been restored.
+            guard store.editorRevision == revision else { return }
+            let urls = collector.values()
+            if urls.isEmpty { store.errorMessage = "没有读取到目标路径，请使用“添加快捷访问”选择文件或文件夹。" }
+            else { store.addShortcuts(urls, at: point, canvasWidth: width) }
+        }
+        return true
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -256,12 +283,27 @@ private struct ShortcutCanvas: View {
             let height = max(geometry.size.height - 4, (positions.values.map { $0.y }.max() ?? 0) + ShortcutLayout.tileSize.height + 64)
             ScrollView([.horizontal, .vertical]) {
                 ZStack(alignment: .topLeading) {
+                    if store.shortcuts.isEmpty {
+                        Button(action: chooseFiles) {
+                            Text("拖入文件夹或文件").font(.system(size: 13)).foregroundStyle(.secondary)
+                                .frame(width: width, height: height)
+                        }.buttonStyle(.plain).disabled(!store.canWrite)
+                    }
                     ForEach(visible) { shortcut in
                         if let origin = positions[shortcut.id] {
                             ShortcutTile(shortcut: shortcut, open: { store.openShortcut(shortcut) }, move: { translation in
+                                beginInteraction()
                                 store.moveShortcut(shortcut.id,
                                                    to: CGPoint(x: origin.x + translation.width, y: origin.y + translation.height),
                                                    canvasWidth: geometry.size.width - 4)
+                            }, dragChanged: { translation in
+                                guard let translation else { dragPreview = nil; draggingID = nil; return }
+                                externalDropActive = false
+                                dropPreview = nil
+                                draggingID = shortcut.id
+                                dragPreview = ShortcutLayout.availablePosition(
+                                    near: CGPoint(x: origin.x + translation.width, y: origin.y + translation.height),
+                                    occupied: positions.filter { $0.key != shortcut.id }.map(\.value))
                             }, canMove: store.canWrite)
                             .frame(width: ShortcutLayout.tileSize.width, height: ShortcutLayout.tileSize.height)
                             .contextMenu {
@@ -272,13 +314,25 @@ private struct ShortcutCanvas: View {
                                 Button("移除快捷按钮") { store.removeShortcut(shortcut) }
                             }
                             .offset(x: origin.x, y: origin.y)
+                            .zIndex(draggingID == shortcut.id ? 1 : 0)
                         }
                     }
+                    if let preview = dragPreview ?? (externalDropActive ? dropPreview : nil) {
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(accent.opacity(0.12))
+                            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(accent, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])))
+                            .frame(width: ShortcutLayout.tileSize.width, height: ShortcutLayout.tileSize.height)
+                            .offset(x: preview.x, y: preview.y).allowsHitTesting(false).zIndex(2)
+                    }
                 }.frame(width: width, height: height, alignment: .topLeading).padding(2)
+                    .contentShape(Rectangle())
                     .coordinateSpace(name: "shortcutCanvas")
+                    .onDrop(of: [UTType.fileURL], delegate: ShortcutFileDrop(enabled: store.canWrite, active: $externalDropActive, update: { point in
+                        dropPreview = point.map { ShortcutLayout.availablePosition(near: dropOrigin($0), occupied: Array(positions.values)) }
+                    }, receive: { providers, point in receive(providers, at: dropOrigin(point), width: geometry.size.width - 4) }))
             }
             .overlay {
-                if visible.isEmpty {
+                if visible.isEmpty && !store.shortcuts.isEmpty {
                     Text("没有匹配的快捷按钮").font(.system(size: 12)).foregroundStyle(.secondary).allowsHitTesting(false)
                 }
             }
@@ -290,6 +344,7 @@ private struct ShortcutTile: View {
     let shortcut: ShelfShortcut
     let open: () -> Void
     let move: (CGSize) -> Void
+    let dragChanged: (CGSize?) -> Void
     let canMove: Bool
     @State private var hovered = false
     @GestureState private var translation = CGSize.zero
@@ -316,7 +371,12 @@ private struct ShortcutTile: View {
                     transaction.animation = nil
                     if canMove { state = value.translation }
                 }
-                .onEnded { value in if canMove { move(value.translation) } })
+                .onChanged { value in if canMove { dragChanged(value.translation) } }
+                .onEnded { value in
+                    if canMove { move(value.translation) }
+                    dragChanged(nil)
+                })
+            .onChange(of: translation) { if $0 == .zero { dragChanged(nil) } }
             .offset(translation)
             .zIndex(translation == .zero ? 0 : 1)
             .help(shortcut.path + "\n单击打开 · 拖动排列 · 右键管理")

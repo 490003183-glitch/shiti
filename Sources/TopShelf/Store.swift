@@ -98,7 +98,11 @@ struct ShelfSnapshot: Codable {
 enum ShelfDisk {
     static func read(from url: URL) throws -> ShelfSnapshot {
         guard FileManager.default.fileExists(atPath: url.path) else { return ShelfSnapshot() }
-        let snapshot = try JSONDecoder().decode(ShelfSnapshot.self, from: Data(contentsOf: url))
+        return try decode(Data(contentsOf: url))
+    }
+
+    static func decode(_ data: Data) throws -> ShelfSnapshot {
+        let snapshot = try JSONDecoder().decode(ShelfSnapshot.self, from: data)
         guard snapshot.version == 2 else {
             throw NSError(domain: "TopShelf", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "数据版本比当前应用更新，请使用较新版本打开。"])
@@ -120,6 +124,106 @@ enum ShelfDisk {
 
 }
 
+struct ShelfBackup: Identifiable {
+    let url: URL
+    let date: Date
+    let bytes: Int
+    let noteCount: Int
+    let shortcutCount: Int
+    var id: String { url.lastPathComponent }
+}
+
+/// Owns only snapshot-UUID.json files; never prunes unrelated user files.
+final class ShelfBackups {
+    let directory: URL
+    let byteLimit: Int
+    private let interval: TimeInterval
+    private var lastCapture: Date?
+
+    init(root: URL, byteLimit: Int = 30 * 1024 * 1024, interval: TimeInterval = 300) {
+        directory = root.appendingPathComponent("Backups", isDirectory: true)
+        self.byteLimit = byteLimit
+        self.interval = interval
+    }
+
+    private func managedFiles() throws -> [(url: URL, date: Date, bytes: Int)] {
+        guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
+        return try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey, .contentModificationDateKey, .fileSizeKey])
+            .compactMap { url in
+                let name = url.deletingPathExtension().lastPathComponent
+                guard name.hasPrefix("snapshot-"), url.pathExtension == "json",
+                      UUID(uuidString: String(name.dropFirst(9))) != nil else { return nil }
+                let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .contentModificationDateKey, .fileSizeKey])
+                guard values.isRegularFile == true, values.isSymbolicLink != true else { return nil }
+                return (url, values.contentModificationDate ?? .distantPast, values.fileSize ?? 0)
+            }.sorted { $0.date > $1.date }
+    }
+
+    func list() throws -> [ShelfBackup] {
+        try managedFiles().compactMap { file in
+            guard let snapshot = try? ShelfDisk.read(from: file.url) else { return nil }
+            return ShelfBackup(url: file.url, date: file.date, bytes: file.bytes,
+                               noteCount: snapshot.notes.count, shortcutCount: snapshot.shortcuts.count)
+        }
+    }
+
+    func read(_ backup: ShelfBackup) throws -> Data {
+        guard try managedFiles().contains(where: { $0.url == backup.url }) else {
+            throw failure("该备份已不存在，请重新打开备份列表。")
+        }
+        let data = try Data(contentsOf: backup.url)
+        _ = try ShelfDisk.decode(data)
+        return data
+    }
+
+    @discardableResult
+    func captureFile(at url: URL, now: Date = Date()) throws -> Bool {
+        // Ordinary typing must not reread the index or scan backups each time.
+        if let lastCapture, now.timeIntervalSince(lastCapture) < interval { return false }
+        if lastCapture == nil, let last = try managedFiles().first?.date {
+            lastCapture = last
+            if now.timeIntervalSince(last) < interval { return false }
+        }
+        return try capture(Data(contentsOf: url), now: now)
+    }
+
+    @discardableResult
+    func capture(_ data: Data, force: Bool = false, validate: Bool = true, now: Date = Date()) throws -> Bool {
+        if !force, let lastCapture, now.timeIntervalSince(lastCapture) < interval { return false }
+        let files = try managedFiles()
+        if !force, let last = lastCapture ?? files.first?.date, now.timeIntervalSince(last) < interval { return false }
+        if validate { _ = try ShelfDisk.decode(data) }
+        guard data.count <= byteLimit else { throw failure("数据超过备份容量上限（\(byteLimit / 1024 / 1024) MiB），请先手动导出。") }
+        if let latest = files.first, (try? Data(contentsOf: latest.url)) == data {
+            lastCapture = now
+            return false
+        }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = directory.appendingPathComponent("snapshot-\(UUID().uuidString).json")
+        // Commit the new backup first. A failed write must not remove good backups.
+        try data.write(to: destination, options: .atomic)
+        try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: destination.path)
+        var count = files.count + 1
+        var bytes = files.reduce(data.count) { $0 + $1.bytes }
+        for file in files.reversed() where count > 3 || bytes > byteLimit {
+            try FileManager.default.removeItem(at: file.url)
+            count -= 1
+            bytes -= file.bytes
+        }
+        lastCapture = now
+        return true
+    }
+
+    private func failure(_ message: String) -> NSError {
+        NSError(domain: "TopShelf.Backup", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+}
+
+private struct ShortcutPlacement {
+    let id: UUID
+    let position: ShortcutPosition?
+}
+
 @MainActor
 final class ShelfStore: ObservableObject {
     @Published private(set) var shortcuts: [ShelfShortcut] = [] {
@@ -132,6 +236,10 @@ final class ShelfStore: ObservableObject {
     @Published var errorMessage: String?
     @Published private(set) var saveStatus = "已保存到本机"
     @Published private(set) var canWrite = true
+    @Published private(set) var backupWarning: String?
+    @Published private(set) var editorRevision = UUID()
+    let undoManager = UndoManager()
+    let backups: ShelfBackups
 
     let root: URL
     private let indexURL: URL
@@ -154,6 +262,8 @@ final class ShelfStore: ObservableObject {
         self.root = root ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("TopShelf", isDirectory: true)
         self.indexURL = self.root.appendingPathComponent("shelf.json")
+        self.backups = ShelfBackups(root: self.root)
+        undoManager.levelsOfUndo = 50
         do {
             try FileManager.default.createDirectory(at: self.root, withIntermediateDirectories: true)
             let snapshot = try ShelfDisk.read(from: indexURL)
@@ -212,6 +322,12 @@ final class ShelfStore: ObservableObject {
         guard canWrite else { return false }
         guard hasUnsavedChanges else { return true }
         do {
+            if FileManager.default.fileExists(atPath: indexURL.path) {
+                do {
+                    try backups.captureFile(at: indexURL)
+                    backupWarning = nil
+                } catch { backupWarning = "自动备份未完成：\(error.localizedDescription)" }
+            }
             try ShelfDisk.write(ShelfSnapshot(notes: notes, shortcuts: shortcuts), to: indexURL)
             hasUnsavedChanges = false
             saveStatus = "已保存到本机"
@@ -223,8 +339,10 @@ final class ShelfStore: ObservableObject {
         }
     }
 
-    func addShortcuts(_ urls: [URL]) {
+    func addShortcuts(_ urls: [URL], at dropPoint: CGPoint? = nil, canvasWidth: CGFloat = 600) {
         guard canWrite else { return }
+        if let point = dropPoint, (!point.x.isFinite || !point.y.isFinite || !canvasWidth.isFinite) { return }
+        var positions = ShortcutLayout.positions(for: shortcuts, width: canvasWidth)
         var existing = Set(shortcuts.map { (try? resolvedURL($0))?.resolvingSymlinksInPath().path ?? URL(fileURLWithPath: $0.path).resolvingSymlinksInPath().path })
         var failures: [String] = []
         for url in urls {
@@ -236,8 +354,19 @@ final class ShelfStore: ObservableObject {
                 let values = try source.resourceValues(forKeys: [.isDirectoryKey])
                 guard !existing.contains(source.resolvingSymlinksInPath().path) else { continue }
                 let bookmark = try makeBookmark(for: source)
-                shortcuts.append(ShelfShortcut(name: source.lastPathComponent.isEmpty ? source.path : source.lastPathComponent,
-                                                path: source.path, bookmark: bookmark, isDirectory: values.isDirectory == true))
+                var shortcut = ShelfShortcut(name: source.lastPathComponent.isEmpty ? source.path : source.lastPathComponent,
+                                             path: source.path, bookmark: bookmark, isDirectory: values.isDirectory == true)
+                if let dropPoint {
+                    let position = ShortcutLayout.availablePosition(near: dropPoint, occupied: Array(positions.values))
+                    guard position.isValid else { throw shortcutError("目标位置超出可排列范围。") }
+                    shortcut.position = position
+                    positions[shortcut.id] = position
+                    // Freeze existing automatic positions before adding a placed item.
+                    for index in shortcuts.indices where shortcuts[index].position == nil {
+                        shortcuts[index].position = positions[shortcuts[index].id]
+                    }
+                }
+                shortcuts.append(shortcut)
                 existing.insert(source.resolvingSymlinksInPath().path)
             } catch { failures.append("\(url.lastPathComponent)：\(error.localizedDescription)") }
         }
@@ -324,12 +453,58 @@ final class ShelfStore: ObservableObject {
         let position = ShortcutLayout.availablePosition(near: point, occupied: occupied)
         guard position.isValid else { return }
         positions[id] = position
-        for index in shortcuts.indices {
-            if let saved = positions[shortcuts[index].id], shortcuts[index].position != saved {
-                shortcuts[index].position = saved
-            }
+        applyPositions(shortcuts.map { ShortcutPlacement(id: $0.id, position: positions[$0.id]) })
+    }
+
+    private func applyPositions(_ placements: [ShortcutPlacement]) {
+        guard canWrite else { return }
+        let changes = placements.filter { placement in
+            shortcuts.contains { $0.id == placement.id && $0.position != placement.position }
+        }
+        guard !changes.isEmpty else { return }
+        let previous = changes.compactMap { placement in
+            shortcuts.first { $0.id == placement.id }.map { ShortcutPlacement(id: $0.id, position: $0.position) }
+        }
+        let grouping = !undoManager.isUndoing && !undoManager.isRedoing
+        if grouping { undoManager.beginUndoGrouping() }
+        undoManager.registerUndo(withTarget: self) { store in store.applyPositions(previous) }
+        undoManager.setActionName("排列快捷按钮")
+        if grouping { undoManager.endUndoGrouping() }
+        for placement in changes {
+            if let index = shortcuts.firstIndex(where: { $0.id == placement.id }) { shortcuts[index].position = placement.position }
         }
         saveNow()
+    }
+
+    @discardableResult
+    func restoreBackup(_ backup: ShelfBackup) -> Bool {
+        do {
+            let data = try backups.read(backup)
+            let restored = try ShelfDisk.decode(data)
+            if canWrite && !saveNow() { return false }
+            if FileManager.default.fileExists(atPath: indexURL.path) {
+                // Also preserve an unreadable original before recovery. It counts
+                // toward the same file/byte limits but is not offered for restore.
+                try backups.capture(Data(contentsOf: indexURL), force: true, validate: false)
+            }
+            try data.write(to: indexURL, options: .atomic)
+            pendingSave?.cancel()
+            pendingSave = nil
+            shortcuts = restored.shortcuts
+            notes = restored.notes
+            selectedNoteID = notes.first?.id
+            hasUnsavedChanges = false
+            canWrite = true
+            errorMessage = nil
+            backupWarning = nil
+            saveStatus = "已从备份恢复"
+            undoManager.removeAllActions()
+            editorRevision = UUID()
+#if APP_STORE
+            shortcutAccess.removeAll()
+#endif
+            return true
+        } catch { report("恢复失败，未替换当前便签", error); return false }
     }
 
     func relinkShortcut(_ shortcut: ShelfShortcut, to url: URL) {

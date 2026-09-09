@@ -2,6 +2,182 @@ import XCTest
 @testable import TopShelf
 
 final class StoreTests: XCTestCase {
+    @MainActor
+    func testDropUsesLandingPositionAndPreservesExistingLayout() throws {
+        let base = try temporaryDirectory()
+        let targets = ["原有", "拖入一", "拖入二"].map { base.appendingPathComponent($0) }
+        for target in targets { try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true) }
+        let store = ShelfStore(root: base.appendingPathComponent("data"))
+        store.addShortcuts([targets[0]])
+        let point = CGPoint(x: 309, y: 135)
+        let preview = ShortcutLayout.availablePosition(near: point, occupied: [ShortcutPosition(x: 0, y: 0)])
+        store.addShortcuts([targets[1], targets[2]], at: point, canvasWidth: 600)
+        XCTAssertEqual(store.shortcuts.map(\.name), ["原有", "拖入一", "拖入二"])
+        XCTAssertEqual(store.shortcuts[0].position, ShortcutPosition(x: 0, y: 0))
+        XCTAssertEqual(store.shortcuts[1].position, preview)
+        XCTAssertEqual(store.shortcuts[2].position, ShortcutPosition(x: preview.x, y: preview.y + 64))
+        let before = store.shortcuts
+        store.addShortcuts(targets, at: CGPoint(x: 0, y: 0))
+        store.addShortcuts([targets[0]], at: CGPoint(x: CGFloat.nan, y: 0))
+        XCTAssertEqual(store.shortcuts, before)
+        XCTAssertEqual(ShelfStore(root: store.root).shortcuts, before)
+    }
+
+    @MainActor
+    func testArrangementUndoRedoPreservesNoteAndRelinkAndDoesNotResurrectRemovedItems() throws {
+        let base = try temporaryDirectory()
+        let targets = ["甲", "乙", "新目标"].map { base.appendingPathComponent($0) }
+        for target in targets { try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true) }
+        let store = ShelfStore(root: base.appendingPathComponent("data"))
+        store.undoManager.groupsByEvent = false
+        store.addShortcuts(Array(targets.prefix(2)))
+        store.addNote()
+        let noteID = try XCTUnwrap(store.selectedNoteID)
+        let id = store.shortcuts[0].id
+        store.moveShortcut(id, to: CGPoint(x: 320, y: 192), canvasWidth: 600)
+        XCTAssertTrue(store.undoManager.canUndo)
+        store.updateNote(noteID, text: "排列撤销不修改便签")
+        store.relinkShortcut(store.shortcuts[0], to: targets[2])
+        store.undoManager.undo()
+        XCTAssertNil(store.shortcuts[0].position)
+        XCTAssertNil(store.shortcuts[1].position)
+        XCTAssertEqual(store.shortcuts[0].path, targets[2].path)
+        XCTAssertEqual(store.notes[0].text, "排列撤销不修改便签")
+        store.undoManager.redo()
+        XCTAssertEqual(store.shortcuts[0].position, ShortcutPosition(x: 320, y: 192))
+        XCTAssertEqual(ShelfStore(root: store.root).shortcuts[0].position, store.shortcuts[0].position)
+        store.removeShortcut(store.shortcuts[0])
+        store.undoManager.undo()
+        XCTAssertEqual(store.shortcuts.count, 1)
+        XCTAssertFalse(store.shortcuts.contains { $0.id == id })
+        XCTAssertTrue(targets.allSatisfy { FileManager.default.fileExists(atPath: $0.path) })
+    }
+
+    private func backupData(_ text: String) throws -> Data {
+        try JSONEncoder().encode(ShelfSnapshot(notes: [ShelfNote(text: text)]))
+    }
+
+    func testBackupRotationKeepsThreeAndLeavesUnrelatedFilesAlone() throws {
+        let root = try temporaryDirectory()
+        let backups = ShelfBackups(root: root)
+        let now = Date()
+        for revision in 0..<7 {
+            try backups.capture(backupData("版本\(revision)"), force: true, now: now.addingTimeInterval(Double(revision)))
+        }
+        let unrelated = backups.directory.appendingPathComponent("用户文件.txt")
+        try Data("保留".utf8).write(to: unrelated)
+        try backups.capture(backupData("版本7"), force: true, now: now.addingTimeInterval(7))
+        let entries = try backups.list()
+        XCTAssertEqual(entries.count, 3)
+        XCTAssertEqual(try entries.map { try ShelfDisk.decode(backups.read($0)).notes[0].text }, ["版本7", "版本6", "版本5"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unrelated.path))
+    }
+
+    func testBackupByteCapValidationAndOversizeNeverEvictGoodCopies() throws {
+        let root = try temporaryDirectory()
+        let sample = try backupData(String(repeating: "A", count: 1024))
+        let backups = ShelfBackups(root: root, byteLimit: sample.count * 2 + 50, interval: 0)
+        for index in 0..<5 {
+            try backups.capture(backupData(String(repeating: "\(index)", count: 1024)), now: Date().addingTimeInterval(Double(index)))
+        }
+        let before = try backups.list()
+        XCTAssertEqual(before.count, 2)
+        XCTAssertLessThanOrEqual(before.reduce(0) { $0 + $1.bytes }, backups.byteLimit)
+        XCTAssertThrowsError(try backups.capture(Data("broken".utf8), force: true))
+        XCTAssertThrowsError(try backups.capture(backupData(String(repeating: "x", count: 4096)), force: true))
+        XCTAssertEqual(try backups.list().map(\.id), before.map(\.id))
+    }
+
+    func testBackupThrottleSurvivesRestartAndSkipsReadingSource() throws {
+        let root = try temporaryDirectory()
+        let file = root.appendingPathComponent("shelf.json")
+        let first = try backupData("最初")
+        let now = Date()
+        try first.write(to: file)
+        let backups = ShelfBackups(root: root)
+        XCTAssertTrue(try backups.captureFile(at: file, now: now))
+        try FileManager.default.removeItem(at: file)
+        XCTAssertFalse(try backups.captureFile(at: file, now: now.addingTimeInterval(1)))
+        XCTAssertFalse(try ShelfBackups(root: root).captureFile(at: file, now: now.addingTimeInterval(2)))
+        try first.write(to: file)
+        XCTAssertFalse(try backups.captureFile(at: file, now: now.addingTimeInterval(301)))
+        try backupData("修改").write(to: file)
+        XCTAssertTrue(try backups.captureFile(at: file, now: now.addingTimeInterval(602)))
+        XCTAssertEqual(try backups.list().count, 2)
+    }
+
+    @MainActor
+    func testRestoreFlushesPendingEditsPreservesCurrentAndCancelsOldAutosave() async throws {
+        let root = try temporaryDirectory()
+        let store = ShelfStore(root: root)
+        let archived = try backupData("历史便签")
+        try store.backups.capture(archived, force: true)
+        let selected = try XCTUnwrap(store.backups.list().first)
+        store.addNote()
+        let id = try XCTUnwrap(store.selectedNoteID)
+        store.updateNote(id, text: "尚未自动保存的当前便签")
+        let revision = store.editorRevision
+        XCTAssertTrue(store.restoreBackup(selected))
+        XCTAssertNotEqual(store.editorRevision, revision)
+        XCTAssertFalse(store.undoManager.canUndo)
+        XCTAssertEqual(store.notes[0].text, "历史便签")
+        let backedUp = try store.backups.list().map { try ShelfDisk.decode(store.backups.read($0)).notes.first?.text }
+        XCTAssertTrue(backedUp.contains("尚未自动保存的当前便签"))
+        try await Task.sleep(nanoseconds: 500_000_000)
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("shelf.json")), archived)
+    }
+
+    @MainActor
+    func testCorruptMainCanBeRecoveredAndRawOriginalIsPreserved() throws {
+        let root = try temporaryDirectory()
+        let file = root.appendingPathComponent("shelf.json")
+        let broken = Data("损坏原文".utf8)
+        try broken.write(to: file)
+        let store = ShelfStore(root: root)
+        XCTAssertFalse(store.canWrite)
+        try store.backups.capture(backupData("有效备份"), force: true)
+        let selected = try XCTUnwrap(store.backups.list().first)
+        XCTAssertTrue(store.restoreBackup(selected))
+        XCTAssertTrue(store.canWrite)
+        XCTAssertEqual(store.notes[0].text, "有效备份")
+        let files = try FileManager.default.contentsOfDirectory(at: store.backups.directory, includingPropertiesForKeys: nil)
+        XCTAssertTrue(try files.contains { try Data(contentsOf: $0) == broken })
+        XCTAssertEqual(try store.backups.list().count, 1)
+    }
+
+    @MainActor
+    func testInvalidOrMissingBackupNeverReplacesCurrentData() throws {
+        let root = try temporaryDirectory()
+        let store = ShelfStore(root: root)
+        store.addNote()
+        try store.backups.capture(backupData("备份"), force: true)
+        let entry = try XCTUnwrap(store.backups.list().first)
+        let file = root.appendingPathComponent("shelf.json")
+        let before = try Data(contentsOf: file)
+        try Data("invalid".utf8).write(to: entry.url)
+        XCTAssertFalse(store.restoreBackup(entry))
+        XCTAssertEqual(try Data(contentsOf: file), before)
+        try FileManager.default.removeItem(at: entry.url)
+        XCTAssertFalse(store.restoreBackup(entry))
+        XCTAssertEqual(try Data(contentsOf: file), before)
+    }
+
+    @MainActor
+    func testRestoreAbortsWhenCurrentFileCannotFitBackupLimit() throws {
+        let root = try temporaryDirectory()
+        let store = ShelfStore(root: root)
+        try store.backups.capture(backupData("历史"), force: true)
+        let entry = try XCTUnwrap(store.backups.list().first)
+        let file = root.appendingPathComponent("shelf.json")
+        let oversized = Data(repeating: 32, count: 30 * 1024 * 1024 + 1)
+        try oversized.write(to: file)
+        let readonly = ShelfStore(root: root)
+        XCTAssertFalse(readonly.canWrite)
+        XCTAssertFalse(readonly.restoreBackup(entry))
+        XCTAssertEqual(try Data(contentsOf: file), oversized)
+        XCTAssertEqual(try readonly.backups.list().count, 1)
+    }
+
     func testLegacyShortcutsLoadWithoutPositionsAndUseFreeSlots() throws {
         let id = UUID()
         let data = Data("{\"id\":\"\(id.uuidString)\",\"name\":\"旧入口\",\"path\":\"/tmp/example\",\"isDirectory\":true}".utf8)
@@ -145,7 +321,8 @@ final class StoreTests: XCTestCase {
         }
         store.updateNote(id, text: "只保留当前文字")
         XCTAssertTrue(store.saveNow())
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), ["shelf.json"])
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: root.path)), ["shelf.json", "Backups"])
+        XCTAssertEqual(try store.backups.list().count, 1)
         XCTAssertLessThan(try Data(contentsOf: root.appendingPathComponent("shelf.json")).count, 1024)
         XCTAssertEqual(ShelfStore(root: root).notes.first?.text, "只保留当前文字")
     }

@@ -67,6 +67,7 @@ struct TopEdgeGesture {
 /// A stationary, transparent window clips the moving content to its own screen.
 /// This avoids drawing the drawer across a second display stacked above it.
 final class DrawerClipView: NSView {
+    override var acceptsFirstResponder: Bool { true }
     let body: NSView
     private var settledProgress: CGFloat = 0
     private var flight: (from: CGFloat, target: CGFloat, start: TimeInterval, duration: TimeInterval)?

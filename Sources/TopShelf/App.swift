@@ -45,6 +45,8 @@ final class ShelfControls: ObservableObject {
     weak var delegate: AppDelegate?
     func hide() { delegate?.hidePanel() }
     func chooseFiles() { delegate?.chooseFiles() }
+    func showBackups() { delegate?.showBackups() }
+    func beginShortcutInteraction() { delegate?.focusShortcuts() }
     func withDialog(_ action: () -> Void) {
         delegate?.dialogOpen = true
         defer { delegate?.dialogOpen = false }
@@ -374,6 +376,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc func newNote() { showPanel(); store.addNote() }
+    func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { store.undoManager }
+    func focusShortcuts() { panel.makeFirstResponder(drawer) }
+    @objc func undo(_ sender: Any?) { store.undoManager.undo() }
+    @objc func redo(_ sender: Any?) { store.undoManager.redo() }
+
+    @objc func showBackups() {
+        guard panel.makeFirstResponder(nil) else { return }
+        if store.canWrite && !store.saveNow() { return }
+        controls.withDialog {
+            do {
+                let entries = try store.backups.list()
+                let alert = NSAlert()
+                alert.messageText = "备份与恢复"
+                alert.informativeText = "最多保留 3 份备份，合计不超过 30 MiB。有修改时最多每 5 分钟自动备份一次。恢复前会保留当前文件。\n" + (store.backupWarning ?? "")
+                let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 450, height: 28))
+                let formatter = DateFormatter()
+                formatter.dateStyle = .medium
+                formatter.timeStyle = .medium
+                for entry in entries {
+                    picker.addItem(withTitle: "\(formatter.string(from: entry.date)) · \(entry.noteCount) 条便签 · \(entry.shortcutCount) 个入口 · \(ByteCountFormatter.string(fromByteCount: Int64(entry.bytes), countStyle: .file))")
+                }
+                if entries.isEmpty {
+                    alert.informativeText += "\n暂无可恢复的有效备份。首次修改已有数据时会自动创建。"
+                    alert.addButton(withTitle: "知道了")
+                } else {
+                    alert.accessoryView = picker
+                    alert.addButton(withTitle: "恢复所选备份…")
+                    alert.addButton(withTitle: "取消")
+                }
+                alert.addButton(withTitle: "查看备份文件夹")
+                let response = alert.runModal()
+                if (!entries.isEmpty && response == .alertThirdButtonReturn) || (entries.isEmpty && response == .alertSecondButtonReturn) {
+                    try FileManager.default.createDirectory(at: store.backups.directory, withIntermediateDirectories: true)
+                    NSWorkspace.shared.open(store.backups.directory)
+                } else if !entries.isEmpty && response == .alertFirstButtonReturn {
+                    let selected = entries[picker.indexOfSelectedItem]
+                    let confirm = NSAlert()
+                    confirm.alertStyle = .warning
+                    confirm.messageText = "恢复这份备份？"
+                    confirm.informativeText = "当前全部便签、快捷入口及排列将替换为 \(formatter.string(from: selected.date)) 的内容（\(selected.noteCount) 条便签、\(selected.shortcutCount) 个入口）。恢复前会保留当前文件，便于回退。"
+                    confirm.addButton(withTitle: "恢复")
+                    confirm.addButton(withTitle: "取消")
+                    if confirm.runModal() == .alertFirstButtonReturn { store.restoreBackup(selected) }
+                }
+            } catch { store.report("无法读取备份", error) }
+        }
+    }
+
     @objc func save() { store.saveNow() }
     @objc func screenChanged() { if isPresented { showPanel() } }
     @objc func showAbout() {

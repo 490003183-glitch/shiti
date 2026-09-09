@@ -9,6 +9,7 @@ DerivedData/
 # Local app data and credentials must never enter the public repository.
 shelf.json
 Deleted Notes/
+Backups/
 .env
 .env.*
 *.p12
