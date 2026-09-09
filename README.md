@@ -6,6 +6,8 @@
 
 本项目使用 [MIT 许可证](LICENSE)。这是独立开发的应用，与 Unclutter 没有关联。
 
+![拾屉展开界面：左侧快捷访问，右侧便签](docs/images/shiti-screenshot.png)
+
 ## 从源码安装
 
 安装 Xcode 或 Xcode Command Line Tools 后，在终端运行：
