@@ -3,6 +3,53 @@ import AppKit
 @testable import TopShelf
 
 final class DrawerTests: XCTestCase {
+    @MainActor
+    func testSelectAllSkipsFirstLogicalLineThenIncludesItWithoutEditing() {
+        let selector = NoteSelection()
+        let editor = NSTextView()
+        let cases = [("标题\n正文\n第二段", "正文\n第二段"), ("标题\r\n\n正文", "\n正文"),
+                     ("👨‍👩‍👧‍👦 标题\n中文😀", "中文😀"), ("标题\u{2028}正文", "正文"),
+                     ("\n正文", "正文"), ("只有标题", ""), ("标题\n", ""), ("", "")]
+        for (text, expected) in cases {
+            selector.reset()
+            editor.string = text
+            editor.setSelectedRange(NSRange(location: 0, length: 0))
+            XCTAssertTrue(selector.select(in: editor))
+            let value = text as NSString
+            XCTAssertEqual(value.substring(with: editor.selectedRange()), expected)
+            XCTAssertEqual(NSMaxRange(editor.selectedRange()), value.length)
+            XCTAssertTrue(selector.select(in: editor))
+            XCTAssertEqual(editor.selectedRange(), NSRange(location: 0, length: value.length))
+            selector.select(in: editor)
+            XCTAssertEqual(editor.selectedRange(), NSRange(location: 0, length: value.length))
+            XCTAssertEqual(editor.string, text)
+        }
+    }
+
+    @MainActor
+    func testSelectionRestartsAfterCaretChangeOrEditingAndLeavesSearchAlone() {
+        let selector = NoteSelection()
+        let editor = NSTextView()
+        editor.string = "标题\n正文"
+        selector.select(in: editor)
+        editor.setSelectedRange(NSRange(location: 1, length: 0))
+        selector.select(in: editor)
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 3, length: 2))
+        selector.reset()
+        selector.select(in: editor)
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 3, length: 2))
+        let other = NSTextView()
+        other.string = "另页\n内容"
+        selector.select(in: other)
+        XCTAssertEqual(other.selectedRange(), NSRange(location: 3, length: 2))
+        let field = NSTextView()
+        field.isFieldEditor = true
+        field.string = "搜索关键字"
+        field.setSelectedRange(NSRange(location: 1, length: 0))
+        XCTAssertFalse(selector.select(in: field))
+        XCTAssertEqual(field.selectedRange(), NSRange(location: 1, length: 0))
+    }
+
     let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
 
     func testFinderDragIntoDrawerDoesNotDismissOnPressOrDrop() {

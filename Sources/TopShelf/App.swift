@@ -59,6 +59,32 @@ final class ShelfPanel: NSPanel {
     override var canBecomeMain: Bool { true }
 }
 
+/// Selection only: no text copies retained, polling, observers, or disk writes.
+@MainActor
+final class NoteSelection {
+    private weak var previousEditor: NSTextView?
+    private var previousRange: NSRange?
+
+    func reset() { previousEditor = nil; previousRange = nil }
+
+    @discardableResult
+    func select(in editor: NSTextView) -> Bool {
+        guard !editor.isFieldEditor, editor.isSelectable else { reset(); return false }
+        let text = editor.string as NSString
+        var bodyStart = 0
+        if text.length > 0 {
+            text.getLineStart(nil, end: &bodyStart, contentsEnd: nil, for: NSRange(location: 0, length: 0))
+        }
+        let repeated = previousEditor === editor && previousRange == editor.selectedRange()
+        let range = repeated ? NSRange(location: 0, length: text.length)
+            : NSRange(location: bodyStart, length: text.length - bodyStart)
+        editor.setSelectedRange(range)
+        previousEditor = editor
+        previousRange = range
+        return true
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let store = ShelfStore()
@@ -77,6 +103,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var globalClickMask: NSEvent.EventTypeMask = []
     private var outsideClickDismissal = OutsideClickDismissal()
     private var localKeyMonitor: Any?
+    private let noteSelection = NoteSelection()
     private var hotKey: EventHotKeyRef?
     private var hotKeyHandler: EventHandlerRef?
     var dialogOpen = false
@@ -90,7 +117,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         setupHotKey()
         updateEventMonitors()
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard event.keyCode == 53, let self, !self.dialogOpen else { return event }
+            guard let self, !self.dialogOpen else { return event }
+            let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+            let key = event.charactersIgnoringModifiers?.lowercased()
+            if modifiers == .command, key == "a", event.window === self.panel, self.panel.attachedSheet == nil,
+               let editor = self.panel.firstResponder as? NSTextView, !editor.isFieldEditor {
+                self.noteSelection.select(in: editor)
+                return nil
+            }
+            // Copy can sit between the two select-all presses; editing or cursor
+            // keys start a fresh selection cycle. Mouse selection is range-checked.
+            if !(modifiers == .command && key == "c") { self.noteSelection.reset() }
+            guard event.keyCode == 53 else { return event }
             self.hidePanel()
             return nil
         }
@@ -177,7 +215,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         edit.addItem(withTitle: "剪切", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
         edit.addItem(withTitle: "复制", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         edit.addItem(withTitle: "粘贴", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        edit.addItem(withTitle: "全选", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        let selectAll = edit.addItem(withTitle: "全选", action: #selector(selectNoteText), keyEquivalent: "a")
+        selectAll.target = self
         editItem.submenu = edit
         main.addItem(editItem)
         NSApp.mainMenu = main
@@ -376,6 +415,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc func newNote() { showPanel(); store.addNote() }
+    @objc func selectNoteText() {
+        if NSApp.keyWindow === panel, panel.attachedSheet == nil,
+           let editor = panel.firstResponder as? NSTextView, noteSelection.select(in: editor) { return }
+        noteSelection.reset()
+        NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
+    }
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { store.undoManager }
     func focusShortcuts() { panel.makeFirstResponder(drawer) }
     @objc func undo(_ sender: Any?) { store.undoManager.undo() }

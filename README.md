@@ -10,7 +10,7 @@
 
 ## 下载与安装
 
-[**下载拾屉 0.3.9 · DMG 安装包**](https://github.com/490003183-glitch/shiti/releases/download/v0.3.9/Shiti-0.3.9-universal.dmg) · [全部发行版本](https://github.com/490003183-glitch/shiti/releases)
+[**下载拾屉 0.3.10 · DMG 安装包**](https://github.com/490003183-glitch/shiti/releases/download/v0.3.10/Shiti-0.3.10-universal.dmg) · [全部发行版本](https://github.com/490003183-glitch/shiti/releases)
 
 需要 macOS 13 或更新版本。安装包包含 Apple Silicon 和 Intel 两种架构；Intel 尚未实机验证，无需自行编译。
 
@@ -33,7 +33,9 @@ bash scripts/build.sh
 
 退出已运行的拾屉，再将 `dist/拾屉.zip` 解压，把 `拾屉.app` 放入 `~/Applications/` 后打开。构建脚本只在本地编译和临时签名，无需付费开发者账号；当前没有经过 Developer ID 签名及公证的公开安装包。
 
-## 当前版本 0.3.9
+## 当前版本 0.3.10
+
+便签编辑区第一次按 **⌘A** 只选择第一行之后的内容（跳过第一行及其换行符），再按一次选择全文；中间按 **⌘C** 复制后也可再次 ⌘A 选择全文。第一行按实际换行划分，自动折行不算新行。只有一行时首次选择为空，再按一次全选。移动光标或键盘编辑后重新开始，搜索框维持系统全选行为。仅改变选区，不改写便签，不新增监听器或后台定时器。
 
 从 Finder 拖入文件夹或文件时，会在鼠标落点附近显示虚线落位预览，松手后按该位置添加快捷按钮。一次拖入多个目标时依次向下寻找空位。内部排列也显示落位预览，松手后按 **⌘Z** 撤销排列，**⇧⌘Z** 重做；撤销只改变位置，不修改便签或文件目标。
 
