@@ -275,6 +275,7 @@ private struct ShortcutCanvas: View {
                         }
                     }
                 }.frame(width: width, height: height, alignment: .topLeading).padding(2)
+                    .coordinateSpace(name: "shortcutCanvas")
             }
             .overlay {
                 if visible.isEmpty {
@@ -307,8 +308,12 @@ private struct ShortcutTile: View {
                 .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(accent.opacity(hovered ? 0.35 : 0.08)))
                 .contentShape(RoundedRectangle(cornerRadius: 10))
         }.buttonStyle(.plain).onHover { hovered = $0 }
-            .highPriorityGesture(DragGesture(minimumDistance: 5)
-                .updating($translation) { value, state, _ in
+            // Measure against the stationary canvas, never the moving button.
+            // The button's local space changes with offset and feeds back into
+            // translation, causing it to lag behind or jump relative to the mouse.
+            .highPriorityGesture(DragGesture(minimumDistance: 5, coordinateSpace: .named("shortcutCanvas"))
+                .updating($translation) { value, state, transaction in
+                    transaction.animation = nil
                     if canMove { state = value.translation }
                 }
                 .onEnded { value in if canMove { move(value.translation) } })
