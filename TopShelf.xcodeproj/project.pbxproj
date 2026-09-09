@@ -1,0 +1,205 @@
+// !$*UTF8*$!
+{
+	"archiveVersion" = 1;
+	"classes" = {
+	};
+	"objectVersion" = 56;
+	"objects" = {
+		"000000000000000000000064" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "Sources/TopShelf/App.swift";
+			"sourceTree" = "SOURCE_ROOT";
+		};
+		"0000000000000000000000C8" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "000000000000000000000064";
+		};
+		"000000000000000000000065" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "Sources/TopShelf/Store.swift";
+			"sourceTree" = "SOURCE_ROOT";
+		};
+		"0000000000000000000000C9" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "000000000000000000000065";
+		};
+		"000000000000000000000066" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "Sources/TopShelf/ShelfView.swift";
+			"sourceTree" = "SOURCE_ROOT";
+		};
+		"0000000000000000000000CA" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "000000000000000000000066";
+		};
+		"000000000000000000000067" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "Sources/TopShelf/Drawer.swift";
+			"sourceTree" = "SOURCE_ROOT";
+		};
+		"0000000000000000000000CB" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "000000000000000000000067";
+		};
+		"00000000000000000000006E" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "image.icns";
+			"path" = "AppStore/Resources/AppIcon.icns";
+			"sourceTree" = "SOURCE_ROOT";
+		};
+		"0000000000000000000000D2" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "00000000000000000000006E";
+		};
+		"00000000000000000000006F" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "text.xml";
+			"path" = "AppStore/Resources/PrivacyInfo.xcprivacy";
+			"sourceTree" = "SOURCE_ROOT";
+		};
+		"0000000000000000000000D3" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "00000000000000000000006F";
+		};
+		"000000000000000000000078" = {
+			"isa" = "PBXFileReference";
+			"explicitFileType" = "wrapper.application";
+			"includeInIndex" = 0;
+			"path" = "TopShelfAppStore.app";
+			"sourceTree" = "BUILT_PRODUCTS_DIR";
+		};
+		"000000000000000000000014" = {
+			"isa" = "PBXGroup";
+			"children" = ("000000000000000000000078");
+			"name" = "Products";
+			"sourceTree" = "<group>";
+		};
+		"000000000000000000000015" = {
+			"isa" = "PBXGroup";
+			"children" = ("000000000000000000000064", "000000000000000000000065", "000000000000000000000066", "000000000000000000000067", "00000000000000000000006E", "00000000000000000000006F", "000000000000000000000014");
+			"sourceTree" = "<group>";
+		};
+		"00000000000000000000001E" = {
+			"isa" = "PBXSourcesBuildPhase";
+			"buildActionMask" = 2147483647;
+			"files" = ("0000000000000000000000C8", "0000000000000000000000C9", "0000000000000000000000CA", "0000000000000000000000CB");
+			"runOnlyForDeploymentPostprocessing" = 0;
+		};
+		"00000000000000000000001F" = {
+			"isa" = "PBXResourcesBuildPhase";
+			"buildActionMask" = 2147483647;
+			"files" = ("0000000000000000000000D2", "0000000000000000000000D3");
+			"runOnlyForDeploymentPostprocessing" = 0;
+		};
+		"000000000000000000000020" = {
+			"isa" = "PBXFrameworksBuildPhase";
+			"buildActionMask" = 2147483647;
+			"files" = ();
+			"runOnlyForDeploymentPostprocessing" = 0;
+		};
+		"000000000000000000000028" = {
+			"isa" = "XCBuildConfiguration";
+			"name" = "Debug";
+			"buildSettings" = {
+				"SDKROOT" = "macosx";
+				"MACOSX_DEPLOYMENT_TARGET" = "13.0";
+				"SWIFT_VERSION" = "5.0";
+				"CLANG_ENABLE_MODULES" = "YES";
+				"SWIFT_OPTIMIZATION_LEVEL" = "-Onone";
+				"DEBUG_INFORMATION_FORMAT" = "dwarf";
+			};
+		};
+		"000000000000000000000032" = {
+			"isa" = "XCBuildConfiguration";
+			"name" = "Debug";
+			"buildSettings" = {
+				"PRODUCT_NAME" = "TopShelfAppStore";
+				"PRODUCT_BUNDLE_IDENTIFIER" = "local.topshelf.appstorepreview";
+				"INFOPLIST_FILE" = "AppStore/Info.plist";
+				"CODE_SIGN_ENTITLEMENTS" = "AppStore/TopShelf.entitlements";
+				"CODE_SIGN_STYLE" = "Automatic";
+				"ENABLE_APP_SANDBOX" = "YES";
+				"ENABLE_HARDENED_RUNTIME" = "YES";
+				"CURRENT_PROJECT_VERSION" = "1";
+				"MARKETING_VERSION" = "1.0";
+				"SWIFT_ACTIVE_COMPILATION_CONDITIONS" = "$(inherited) APP_STORE DEBUG";
+				"COMBINE_HIDPI_IMAGES" = "YES";
+				"LD_RUNPATH_SEARCH_PATHS" = ("$(inherited)", "@executable_path/../Frameworks");
+			};
+		};
+		"000000000000000000000029" = {
+			"isa" = "XCBuildConfiguration";
+			"name" = "Release";
+			"buildSettings" = {
+				"SDKROOT" = "macosx";
+				"MACOSX_DEPLOYMENT_TARGET" = "13.0";
+				"SWIFT_VERSION" = "5.0";
+				"CLANG_ENABLE_MODULES" = "YES";
+				"SWIFT_OPTIMIZATION_LEVEL" = "-O";
+				"DEBUG_INFORMATION_FORMAT" = "dwarf-with-dsym";
+			};
+		};
+		"000000000000000000000033" = {
+			"isa" = "XCBuildConfiguration";
+			"name" = "Release";
+			"buildSettings" = {
+				"PRODUCT_NAME" = "TopShelfAppStore";
+				"PRODUCT_BUNDLE_IDENTIFIER" = "local.topshelf.appstorepreview";
+				"INFOPLIST_FILE" = "AppStore/Info.plist";
+				"CODE_SIGN_ENTITLEMENTS" = "AppStore/TopShelf.entitlements";
+				"CODE_SIGN_STYLE" = "Automatic";
+				"ENABLE_APP_SANDBOX" = "YES";
+				"ENABLE_HARDENED_RUNTIME" = "YES";
+				"CURRENT_PROJECT_VERSION" = "1";
+				"MARKETING_VERSION" = "1.0";
+				"SWIFT_ACTIVE_COMPILATION_CONDITIONS" = "$(inherited) APP_STORE";
+				"COMBINE_HIDPI_IMAGES" = "YES";
+				"LD_RUNPATH_SEARCH_PATHS" = ("$(inherited)", "@executable_path/../Frameworks");
+			};
+		};
+		"00000000000000000000003C" = {
+			"isa" = "XCConfigurationList";
+			"buildConfigurations" = ("000000000000000000000028", "000000000000000000000029");
+			"defaultConfigurationIsVisible" = 0;
+			"defaultConfigurationName" = "Release";
+		};
+		"00000000000000000000003D" = {
+			"isa" = "XCConfigurationList";
+			"buildConfigurations" = ("000000000000000000000032", "000000000000000000000033");
+			"defaultConfigurationIsVisible" = 0;
+			"defaultConfigurationName" = "Release";
+		};
+		"000000000000000000000046" = {
+			"isa" = "PBXNativeTarget";
+			"buildConfigurationList" = "00000000000000000000003D";
+			"buildPhases" = ("00000000000000000000001E", "000000000000000000000020", "00000000000000000000001F");
+			"buildRules" = ();
+			"dependencies" = ();
+			"name" = "TopShelfAppStore";
+			"productName" = "TopShelfAppStore";
+			"productReference" = "000000000000000000000078";
+			"productType" = "com.apple.product-type.application";
+		};
+		"000000000000000000000001" = {
+			"isa" = "PBXProject";
+			"attributes" = {
+				"LastUpgradeCheck" = "2600";
+			};
+			"buildConfigurationList" = "00000000000000000000003C";
+			"compatibilityVersion" = "Xcode 14.0";
+			"developmentRegion" = "zh_CN";
+			"hasScannedForEncodings" = 0;
+			"knownRegions" = ("zh_CN", "en", "Base");
+			"mainGroup" = "000000000000000000000015";
+			"productRefGroup" = "000000000000000000000014";
+			"projectDirPath" = "";
+			"projectRoot" = "";
+			"targets" = ("000000000000000000000046");
+		};
+	};
+	"rootObject" = "000000000000000000000001";
+}

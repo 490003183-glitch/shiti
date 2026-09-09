@@ -1,0 +1,21 @@
+.build/
+dist/
+.DS_Store
+*.xcuserstate
+xcuserdata/
+.swiftpm/
+DerivedData/
+
+# Local app data and credentials must never enter the public repository.
+shelf.json
+Deleted Notes/
+.env
+.env.*
+*.p12
+*.p8
+*.mobileprovision
+*.provisionprofile
+
+# Unpublished business and submission drafts remain local.
+/AppStore/Submission.md
+/AppStore/Privacy-policy-draft.md
