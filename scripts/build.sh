@@ -1,12 +1,27 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-swift build -c release
+if [[ $# -gt 1 || ( $# -eq 1 && "$1" != "--universal" ) ]]; then
+    echo "Usage: bash scripts/build.sh [--universal]" >&2
+    exit 2
+fi
 STAGE="$(mktemp -d /private/tmp/topshelf-build.XXXXXX)"
 trap 'rm -rf "$STAGE"' EXIT
 APP="$STAGE/拾屉.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp .build/release/TopShelf "$APP/Contents/MacOS/TopShelf"
+if [[ "${1:-}" == "--universal" ]]; then
+    for ARCH in arm64 x86_64; do
+        swift build -c release --triple "$ARCH-apple-macosx13.0"
+        BIN_DIR="$(swift build -c release --triple "$ARCH-apple-macosx13.0" --show-bin-path)"
+        cp "$BIN_DIR/TopShelf" "$STAGE/TopShelf-$ARCH"
+    done
+    lipo -create "$STAGE/TopShelf-arm64" "$STAGE/TopShelf-x86_64" -output "$APP/Contents/MacOS/TopShelf"
+    lipo "$APP/Contents/MacOS/TopShelf" -verify_arch arm64 x86_64
+else
+    swift build -c release
+    BIN_DIR="$(swift build -c release --show-bin-path)"
+    cp "$BIN_DIR/TopShelf" "$APP/Contents/MacOS/TopShelf"
+fi
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

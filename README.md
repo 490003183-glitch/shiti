@@ -8,6 +8,18 @@
 
 ![拾屉展开界面：左侧快捷访问，右侧便签](docs/images/shiti-screenshot.png)
 
+## 下载与安装
+
+[**下载拾屉 0.3.8 · DMG 安装包**](https://github.com/490003183-glitch/shiti/releases/download/v0.3.8/Shiti-0.3.8-universal.dmg) · [全部发行版本](https://github.com/490003183-glitch/shiti/releases)
+
+需要 macOS 13 或更新版本。安装包包含 Apple Silicon 和 Intel 两种架构；Intel 尚未实机验证，无需自行编译。
+
+1. 打开 DMG；若已运行拾屉，请先退出。
+2. 将「拾屉.app」拖到旁边的 **Applications（应用程序）** 文件夹。
+3. 从「应用程序」打开拾屉，再推出 DMG。
+
+**首次打开提示：** 当前版本仅做临时签名，尚无 Apple Developer ID 签名和公证，macOS 可能拦截。确认下载自本仓库且信任该版本后，可按 [Apple 官方说明](https://support.apple.com/zh-cn/102445)，在尝试打开后进入「系统设置 → 隐私与安全性 → 仍要打开」。受管理的 Mac 可能需要管理员批准。
+
 ## 从源码安装
 
 安装 Xcode 或 Xcode Command Line Tools 后，在终端运行：
@@ -94,7 +106,7 @@ bash scripts/build.sh
 
 生成 `dist/拾屉.zip`，仅保留一份安装包。构建脚本在临时目录完成签名和校验，再打包，避免云同步目录自动附加的 Finder 元数据干扰签名。安装时退出旧版，将 ZIP 解压到本机应用目录。
 
-当前脚本为本机架构构建并做临时签名。向其他电脑分发前，需要另行完成目标架构构建、Developer ID 签名和公证。
+`bash scripts/build.sh` 为本机架构构建并做临时签名。使用 `bash scripts/make-dmg.sh` 可构建 Apple Silicon + Intel 通用应用，并生成拖拽安装的 DMG 与 `dist/SHA256SUMS` 校验文件。DMG 发布在 GitHub Releases，不放入源码 Git 历史。Developer ID 签名和公证尚未完成。
 
 ## App Store 准备中
 
