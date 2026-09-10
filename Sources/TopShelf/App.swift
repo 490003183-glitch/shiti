@@ -69,7 +69,7 @@ final class NoteSelection {
 
     @discardableResult
     func select(in editor: NSTextView) -> Bool {
-        guard !editor.isFieldEditor, editor.isSelectable else { reset(); return false }
+        guard !editor.isFieldEditor, editor.isSelectable, !editor.hasMarkedText() else { reset(); return false }
         let text = editor.string as NSString
         var bodyStart = 0
         if text.length > 0 {
@@ -118,12 +118,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         updateEventMonitors()
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, !self.dialogOpen else { return event }
+            if let editor = self.panel.firstResponder as? NSTextView, editor.hasMarkedText() {
+                self.noteSelection.reset()
+                return event // Candidate selection, Esc, and shortcuts belong to the IME.
+            }
             let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
             let key = event.charactersIgnoringModifiers?.lowercased()
             if modifiers == .command, key == "a", event.window === self.panel, self.panel.attachedSheet == nil,
                let editor = self.panel.firstResponder as? NSTextView, !editor.isFieldEditor {
-                self.noteSelection.select(in: editor)
-                return nil
+                if self.noteSelection.select(in: editor) { return nil }
             }
             // Copy can sit between the two select-all presses; editing or cursor
             // keys start a fresh selection cycle. Mouse selection is range-checked.
@@ -276,6 +279,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     self.dragStartChangeCount = NSPasteboard(name: .drag).changeCount
                 }
                 guard self.isPresented, !self.controls.isPinned, !self.dialogOpen else { return }
+                if let editor = self.panel.firstResponder as? NSTextView, editor.hasMarkedText() {
+                    // The candidate window can be outside our frame and belongs
+                    // to another process. Ignore this press/release pair.
+                    self.outsideClickDismissal = OutsideClickDismissal()
+                    return
+                }
                 // Finder owns the initial press/drag. Keep the drawer available
                 // until release, and never dismiss a drop landing inside it.
                 let inside = self.panel.frame.contains(NSEvent.mouseLocation)

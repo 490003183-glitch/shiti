@@ -12,7 +12,7 @@ struct ShelfView: View {
     @State private var showFileSearch = false
     @State private var showNoteSearch = false
     @State private var pendingNoteRemoval: ShelfNote?
-    @FocusState private var editorFocused: Bool
+    @State private var editorFocusRequest = UUID()
 
     private var visibleNotes: [ShelfNote] {
         store.notes.filter { noteSearch.isEmpty || $0.text.localizedStandardContains(noteSearch) }
@@ -156,12 +156,11 @@ struct ShelfView: View {
                                         .font(.system(size: 14)).foregroundStyle(.tertiary).lineSpacing(7)
                                         .padding(.top, 8).padding(.leading, 6).allowsHitTesting(false)
                                 }
-                                TextEditor(text: Binding(
+                                NoteEditor(text: Binding(
                                     get: { store.notes.first(where: { $0.id == noteID })?.text ?? "" },
-                                    set: { store.updateNote(noteID, text: $0) }))
-                                    .font(.system(size: 14)).lineSpacing(6)
-                                    .scrollContentBackground(.hidden).focused($editorFocused)
-                                    .id("\(note.id)-\(store.editorRevision)").disabled(!store.canWrite)
+                                    set: { store.updateNote(noteID, text: $0) }),
+                                           editable: store.canWrite, focusRequest: editorFocusRequest)
+                                    .id("\(note.id)-\(store.editorRevision)")
                             }
                         }.frame(maxWidth: .infinity)
                     } else {
@@ -186,7 +185,7 @@ struct ShelfView: View {
     private func newNote() {
         noteSearch = ""
         store.addNote()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { editorFocused = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { editorFocusRequest = UUID() }
     }
 
     private func exportNote(_ note: ShelfNote) {
@@ -198,6 +197,157 @@ struct ShelfView: View {
                 do { try note.text.write(to: url, atomically: true, encoding: .utf8) }
                 catch { store.report("导出失败", error) }
             }
+        }
+    }
+}
+
+/// Keep the native input session intact while SwiftUI refreshes surrounding UI.
+struct NoteEditor: NSViewRepresentable {
+    @Binding var text: String
+    let editable: Bool
+    let focusRequest: UUID
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: NoteEditor
+        var lastFocusRequest: UUID
+        init(_ parent: NoteEditor) { self.parent = parent; lastFocusRequest = parent.focusRequest }
+        func publish(_ editor: NSTextView) {
+            guard !editor.hasMarkedText(), parent.text != editor.string else { return }
+            parent.text = editor.string
+        }
+        func textDidChange(_ notification: Notification) {
+            if let editor = notification.object as? NSTextView { publish(editor) }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = false
+        let editor = NoteTextView(frame: .zero)
+        editor.isRichText = false
+        editor.importsGraphics = false
+        editor.allowsUndo = true
+        editor.isEditable = editable
+        editor.isSelectable = true
+        editor.drawsBackground = false
+        editor.font = .systemFont(ofSize: 14)
+        editor.textColor = .labelColor
+        editor.textContainerInset = NSSize(width: 0, height: 8)
+        editor.isVerticallyResizable = true
+        editor.isHorizontallyResizable = false
+        editor.minSize = .zero
+        editor.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        editor.autoresizingMask = [.width]
+        editor.textContainer?.widthTracksTextView = true
+        editor.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 6
+        editor.defaultParagraphStyle = paragraph
+        editor.typingAttributes = [.font: NSFont.systemFont(ofSize: 14), .foregroundColor: NSColor.labelColor,
+                                  .paragraphStyle: paragraph]
+        editor.string = text
+        editor.delegate = context.coordinator
+        editor.committed = { [weak coordinator = context.coordinator] editor in coordinator?.publish(editor) }
+        scroll.documentView = editor
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        guard let editor = scroll.documentView as? NoteTextView else { return }
+        context.coordinator.parent = self
+        // Marked text belongs to the input method, not yet to the saved model.
+        // Never replace it with the last committed value during a view update.
+        if !editor.hasMarkedText(), editor.string != text {
+            let selection = editor.selectedRange()
+            editor.string = text
+            let count = (text as NSString).length
+            let start = min(selection.location, count)
+            editor.setSelectedRange(NSRange(location: start, length: min(selection.length, count - start)))
+        }
+        if editor.isEditable != editable { editor.isEditable = editable }
+        if context.coordinator.lastFocusRequest != focusRequest {
+            context.coordinator.lastFocusRequest = focusRequest
+            editor.requestFocus()
+        }
+    }
+}
+
+final class NoteTextView: NSTextView {
+    var committed: ((NSTextView) -> Void)?
+    private var settingMarkedText = false
+    private var needsInitialFocus = true
+    private var undoObservers: [NSObjectProtocol] = []
+    private weak var observedUndoManager: UndoManager?
+
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        settingMarkedText = true
+        defer { settingMarkedText = false }
+        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+    }
+
+    override func unmarkText() {
+        super.unmarkText()
+        if !settingMarkedText { committed?(self) }
+    }
+
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        observeUndoChanges()
+        super.insertText(string, replacementRange: replacementRange)
+        committed?(self)
+    }
+
+    override func resignFirstResponder() -> Bool {
+        // Explicitly leaving the note commits the composition before save/close.
+        let resigned = super.resignFirstResponder()
+        if resigned {
+            if hasMarkedText() { inputContext?.discardMarkedText(); unmarkText() }
+            committed?(self)
+        }
+        return resigned
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        observeUndoChanges()
+        if window != nil, needsInitialFocus { needsInitialFocus = false; requestFocus() }
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        observeUndoChanges()
+        return became
+    }
+
+    private func observeUndoChanges() {
+        let manager = window == nil ? nil : undoManager
+        guard manager !== observedUndoManager else { return }
+        for observer in undoObservers { NotificationCenter.default.removeObserver(observer) }
+        undoObservers.removeAll()
+        observedUndoManager = manager
+        if let manager {
+            // AppKit can change text through the window's shared undo manager
+            // without textDidChange (including undo invoked from the menu).
+            for name in [Notification.Name.NSUndoManagerDidUndoChange, Notification.Name.NSUndoManagerDidRedoChange] {
+                undoObservers.append(NotificationCenter.default.addObserver(forName: name, object: manager, queue: .main) { [weak self] _ in
+                    DispatchQueue.main.async {
+                        guard let self else { return }
+                        self.committed?(self)
+                    }
+                })
+            }
+        }
+    }
+
+    deinit { for observer in undoObservers { NotificationCenter.default.removeObserver(observer) } }
+
+    func requestFocus() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let window = self.window, self.isEditable else { return }
+            window.makeFirstResponder(self)
         }
     }
 }

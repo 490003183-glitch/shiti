@@ -1,8 +1,91 @@
 import XCTest
 import AppKit
+import SwiftUI
 @testable import TopShelf
 
 final class DrawerTests: XCTestCase {
+    @MainActor
+    func testComposingTextSurvivesStoreRefreshAndAutosave() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("TopShelfIMETest-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ShelfStore(root: root)
+        store.addNote()
+        let controls = ShelfControls()
+        let host = NSHostingView(rootView: ShelfView(store: store, controls: controls))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 500),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        func editor(in view: NSView) -> NSTextView? {
+            if let text = view as? NSTextView, !text.isFieldEditor { return text }
+            return view.subviews.lazy.compactMap { editor(in: $0) }.first
+        }
+        let text = try XCTUnwrap(editor(in: host))
+        window.makeFirstResponder(text)
+        text.insertText("标题\n", replacementRange: NSRange(location: 0, length: 0))
+        text.breakUndoCoalescing()
+        text.setMarkedText("nihao", selectedRange: NSRange(location: 5, length: 0),
+                           replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(text.hasMarkedText())
+        // A model refresh and the existing save debounce must not replace IME text.
+        controls.isPinned.toggle()
+        try await Task.sleep(nanoseconds: 500_000_000)
+        XCTAssertTrue(editor(in: host) === text)
+        XCTAssertTrue(text.hasMarkedText())
+        XCTAssertEqual(text.string, "标题\nnihao")
+        XCTAssertEqual(store.notes.first?.text, "标题\n")
+        XCTAssertEqual(ShelfStore(root: root).notes.first?.text, "标题\n")
+        text.setMarkedText("nihaoma", selectedRange: NSRange(location: 7, length: 0), replacementRange: text.markedRange())
+        controls.isPinned.toggle()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertTrue(text.hasMarkedText())
+        XCTAssertEqual(text.string, "标题\nnihaoma")
+        text.insertText("你好", replacementRange: text.markedRange())
+        try await Task.sleep(nanoseconds: 500_000_000)
+        XCTAssertFalse(text.hasMarkedText())
+        XCTAssertEqual(store.notes.first?.text, "标题\n你好")
+        XCTAssertEqual(ShelfStore(root: root).notes.first?.text, "标题\n你好")
+        let manager = try XCTUnwrap(text.undoManager)
+        XCTAssertTrue(manager.canUndo)
+        manager.undo()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertFalse(text.hasMarkedText(), "Undo must finish composition")
+        XCTAssertEqual(store.notes.first?.text, text.string)
+        XCTAssertFalse(text.string.contains("你好"))
+        manager.redo()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(store.notes.first?.text, "标题\n你好")
+    }
+
+    @MainActor
+    func testTitleSelectionDoesNotTouchActiveComposition() {
+        let editor = NoteTextView()
+        editor.string = "标题\n"
+        editor.setSelectedRange(NSRange(location: 3, length: 0))
+        editor.setMarkedText("pinyin", selectedRange: NSRange(location: 6, length: 0),
+                             replacementRange: NSRange(location: NSNotFound, length: 0))
+        let range = editor.markedRange()
+        XCTAssertFalse(NoteSelection().select(in: editor))
+        XCTAssertTrue(editor.hasMarkedText())
+        XCTAssertEqual(editor.markedRange(), range)
+        XCTAssertEqual(editor.string, "标题\npinyin")
+    }
+
+    @MainActor
+    func testLeavingEditorPreservesUnconfirmedText() {
+        let editor = NoteTextView()
+        var committed = ""
+        editor.committed = { committed = $0.string }
+        editor.setMarkedText("pinyin", selectedRange: NSRange(location: 6, length: 0),
+                             replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(editor.resignFirstResponder())
+        XCTAssertFalse(editor.hasMarkedText())
+        XCTAssertEqual(committed, "pinyin")
+    }
+
     @MainActor
     func testSelectAllSkipsFirstLogicalLineThenIncludesItWithoutEditing() {
         let selector = NoteSelection()
