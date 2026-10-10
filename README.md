@@ -6,7 +6,7 @@
 
 本项目使用 [MIT 许可证](LICENSE)。这是独立开发的应用，与 Unclutter 没有关联。
 
-![拾屉展开界面：左侧快捷访问，右侧便签](docs/images/shiti-screenshot.png)
+![拾屉展开界面：快捷访问、系统状态与充电功率电压、便签](docs/images/shiti-screenshot.jpg)
 
 ## 下载与安装
 
