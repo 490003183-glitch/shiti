@@ -10,6 +10,7 @@ private var applicationDisplayName: String {
 
 @MainActor
 final class ShelfControls: ObservableObject {
+    let systemStatus = SystemStatusMonitor()
     @Published var isPinned = false {
         didSet { if isPinned != oldValue { delegate?.updateEventMonitors() } }
     }
@@ -113,6 +114,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         controls.delegate = self
         setupMenu()
         setupPanel()
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(systemWillSleep), name: NSWorkspace.willSleepNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(systemDidWake), name: NSWorkspace.didWakeNotification, object: nil)
         setupStatusItem()
         setupHotKey()
         updateEventMonitors()
@@ -376,6 +379,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         guard !isPresented else { return }
         isPresented = true
+        controls.systemStatus.setVisible(true)
         updateEventMonitors()
         panel.hasShadow = false
         drawer.animate(open: true) { [weak self] in
@@ -397,6 +401,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             suspendedResponder = responder
         }
         isPresented = false
+        controls.systemStatus.setVisible(false)
         updateEventMonitors()
         panel.hasShadow = false
         drawer.animate(open: false) { [weak self] in
@@ -479,6 +484,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc func save() { store.saveNow() }
+    @objc func systemWillSleep() { controls.systemStatus.setSleeping(true) }
+    @objc func systemDidWake() { controls.systemStatus.setSleeping(false) }
     @objc func screenChanged() { if isPresented { showPanel() } }
     @objc func showAbout() {
         controls.withDialog {
@@ -505,6 +512,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        controls.systemStatus.setVisible(false)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
         drawer.stop()
         if let globalScrollMonitor { NSEvent.removeMonitor(globalScrollMonitor) }
         if let localScrollMonitor { NSEvent.removeMonitor(localScrollMonitor) }

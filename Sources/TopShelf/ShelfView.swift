@@ -82,6 +82,9 @@ struct ShelfView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 Text("快捷访问").font(.system(size: 13, weight: .semibold))
+                if !showFileSearch {
+                    SystemStatusStrip(monitor: controls.systemStatus).padding(.leading, 8)
+                }
                 Spacer()
                 if showFileSearch { searchField("搜索", text: $fileSearch).frame(width: 160) }
                 Button { showFileSearch.toggle(); if !showFileSearch { fileSearch = "" } } label: {
@@ -89,7 +92,7 @@ struct ShelfView: View {
                 }.buttonStyle(.plain).foregroundStyle(.secondary).help("搜索快捷访问")
                 Button { controls.chooseFiles() } label: { Image(systemName: "plus").frame(width: 24, height: 24) }
                     .buttonStyle(.plain).help("添加快捷访问").disabled(!store.canWrite)
-            }.frame(height: 28)
+            }.frame(minHeight: 28)
             ShortcutCanvas(store: store, search: fileSearch, relink: relink,
                            chooseFiles: controls.chooseFiles, beginInteraction: controls.beginShortcutInteraction)
         }.padding(16)
@@ -138,6 +141,7 @@ struct ShelfView: View {
                                             Text(note.title).font(.system(size: 12, weight: .medium)).lineLimit(2)
                                                 .foregroundStyle(.primary).multilineTextAlignment(.leading)
                                         }.frame(maxWidth: .infinity, alignment: .leading).padding(10)
+                                            .contentShape(Rectangle())
                                             .background(store.selectedNoteID == note.id ? accent.opacity(0.12) : Color.clear,
                                                         in: RoundedRectangle(cornerRadius: 9))
                                     }.buttonStyle(.plain)
