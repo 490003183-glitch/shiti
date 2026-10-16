@@ -66,12 +66,55 @@ enum ConnectionIndicator: Equatable {
     var symbol: String { self == .proxy ? "network" : "shield.lefthalf.filled" }
 }
 
+enum ThermalPressure: CaseIterable {
+    case unknown, nominal, fair, serious, critical
+
+    init(_ state: ProcessInfo.ThermalState) {
+        switch state {
+        case .nominal: self = .nominal
+        case .fair: self = .fair
+        case .serious: self = .serious
+        case .critical: self = .critical
+        @unknown default: self = .unknown
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .unknown: return "热压 —"
+        case .nominal: return "热压 正常"
+        case .fair: return "热压 偏热"
+        case .serious: return "热压 严重"
+        case .critical: return "热压 临界"
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .unknown: return "尚未取得系统热压力状态。"
+        case .nominal: return "系统报告热压力处于正常范围，不代表已核实 CPU 满速。部分不支持热状态的系统也会返回正常。"
+        case .fair: return "系统报告轻度热压力，可能加强散热；仅凭此状态不能确认 CPU 已因高温降频。"
+        case .serious: return "系统报告严重热压力，性能可能受影响；无法据此计算 CPU 降频幅度。"
+        case .critical: return "系统报告临界热压力，性能受到明显影响，需要降温；无法据此计算 CPU 降频幅度。"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .unknown, .nominal: return .secondary
+        case .fair: return .yellow
+        case .serious: return .orange
+        case .critical: return .red
+        }
+    }
+}
+
 struct SystemStatusSnapshot: Equatable {
     var cpu: Double?
     var gpu: Double?
     var ane: Double?
     var temperature: Double?
-    var thermal = "温况未知"
+    var thermal: ThermalPressure = .unknown
     var rate: NetworkRate?
     var powerInput = PowerInputSnapshot()
     var connection: ConnectionIndicator = .unavailable
@@ -257,17 +300,11 @@ private final class StatusSampler: @unchecked Sendable {
         snapshot.gpu = gpu.read()
         snapshot.ane = ane.read(at: time)
         snapshot.powerInput = PowerInputReader.read()
+        snapshot.thermal = ThermalPressure(ProcessInfo.processInfo.thermalState)
         let interfaces = LocalNetworkStatus.interfaces()
         snapshot.rate = network.update(interfaces?.physical, at: time)
         if tick % 3 == 0 {
             snapshot.temperature = temperature.read()
-            switch ProcessInfo.processInfo.thermalState {
-            case .nominal: snapshot.thermal = "温况正常"
-            case .fair: snapshot.thermal = "温况偏热"
-            case .serious: snapshot.thermal = "温况较热"
-            case .critical: snapshot.thermal = "温况过热"
-            @unknown default: snapshot.thermal = "温况未知"
-            }
             snapshot.connection = LocalNetworkStatus.connection(tunnel: interfaces?.tunnel ?? false)
         }
         tick += 1
@@ -344,6 +381,12 @@ struct SystemStatusReadout: View {
                 environment(compact: true)
                 powerInput
             }.fixedSize(horizontal: true, vertical: false)
+            VStack(alignment: .leading, spacing: 4) {
+                loads(compact: true)
+                temperatureAndPressure(compact: true)
+                connectivity(compact: true)
+                powerInput
+            }.fixedSize(horizontal: true, vertical: false)
         }
         .font(.system(size: 11, weight: .medium)).monospacedDigit()
         .foregroundStyle(.secondary)
@@ -386,11 +429,25 @@ struct SystemStatusReadout: View {
     }
     private func environment(compact: Bool) -> some View {
         HStack(spacing: compact ? 8 : 14) {
+            temperatureAndPressure(compact: compact)
+            connectivity(compact: compact)
+        }.fixedSize(horizontal: true, vertical: false)
+    }
+    private func temperatureAndPressure(compact: Bool) -> some View {
+        HStack(spacing: compact ? 8 : 14) {
             Label {
-                reservedText(status.temperature.map { String(format: compact ? "%.0f°" : "%.0f°C", $0) } ?? (compact ? status.thermal.replacingOccurrences(of: "温况", with: "") : status.thermal),
-                             sample: compact ? "125°" : "温况过热")
+                reservedText(status.temperature.map { String(format: compact ? "%.0f°" : "%.0f°C", $0) } ?? "—",
+                             sample: compact ? "125°" : "125°C")
             } icon: { Image(systemName: "thermometer.medium") }
-                .help("CPU 已识别传感器中的最高读数，非机身表面温度。温度读取不支持或不可用时，改显示系统温况等级。")
+                .help("CPU 已识别传感器中的最高读数，非机身表面温度；— 表示温度读取不支持或不可用。旁边的热压力独立取自系统，不根据摄氏温度推断。")
+            reservedText(status.thermal.title, sample: "热压 临界", alignment: .leading)
+                .foregroundStyle(status.thermal.color)
+                .help(status.thermal.help)
+                .accessibilityLabel("系统热压力：" + status.thermal.title.replacingOccurrences(of: "热压 ", with: ""))
+        }.fixedSize(horizontal: true, vertical: false)
+    }
+    private func connectivity(compact: Bool) -> some View {
+        HStack(spacing: compact ? 8 : 14) {
             HStack(spacing: 5) {
                 Label {
                     reservedText(speed(status.rate?.download, compact: compact), sample: compact ? "1024.0M" : "1024.0 MB/s")

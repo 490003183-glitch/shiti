@@ -8,14 +8,15 @@ final class SystemStatusTests: XCTestCase {
     func testStatusReadoutKeepsItsSizeWhenLiveValuesChange() {
         let samples = [
             SystemStatusSnapshot(),
-            SystemStatusSnapshot(cpu: 9, gpu: 9, ane: 9, temperature: 9,
+            SystemStatusSnapshot(cpu: 9, gpu: 9, ane: 9, temperature: 9, thermal: .nominal,
                                  rate: .init(download: 9, upload: 9),
                                  powerInput: .init(connected: true, watts: 9.9, volts: 9.9), connection: .vpn),
-            SystemStatusSnapshot(cpu: 100, gpu: 100, ane: 100, temperature: 124,
+            SystemStatusSnapshot(cpu: 100, gpu: 100, ane: 100, temperature: 124, thermal: .serious,
                                  rate: .init(download: 1023.99 * 1024 * 1024, upload: 1023.99 * 1024),
                                  powerInput: .init(connected: true, watts: 1000, volts: 60), connection: .connecting),
-            SystemStatusSnapshot(thermal: "温况过热", rate: .init(download: 1024 * 1024, upload: 1024),
-                                 powerInput: .init(connected: false), connection: .proxy)
+            SystemStatusSnapshot(thermal: .critical, rate: .init(download: 1024 * 1024, upload: 1024),
+                                 powerInput: .init(connected: false), connection: .proxy),
+            SystemStatusSnapshot(temperature: 42, thermal: .fair)
         ]
         for width in [220.0, 280, 340, 400, 460, 520, 600, 800] {
             let sizes = samples.map { sample in
@@ -26,6 +27,16 @@ final class SystemStatusTests: XCTestCase {
                 XCTAssertEqual(size.height, sizes[0].height, accuracy: 0.5, "Readings changed row count at width \(width)")
             }
         }
+    }
+
+    func testThermalPressureUsesSystemStateIndependentlyOfTemperature() {
+        XCTAssertEqual(ThermalPressure(.nominal), .nominal)
+        XCTAssertEqual(ThermalPressure(.fair), .fair)
+        XCTAssertEqual(ThermalPressure(.serious), .serious)
+        XCTAssertEqual(ThermalPressure(.critical), .critical)
+        XCTAssertEqual(SystemStatusSnapshot().thermal, .unknown)
+        XCTAssertEqual(SystemStatusSnapshot(temperature: 95, thermal: .nominal).thermal.title, "热压 正常")
+        XCTAssertEqual(SystemStatusSnapshot(temperature: nil, thermal: .critical).thermal.title, "热压 临界")
     }
 
     func testPowerInputUsesMeasuredMilliunitsEvenWhenBatteryIsNotCharging() {
@@ -182,5 +193,6 @@ final class SystemStatusTests: XCTestCase {
         XCTAssertNil(monitor.snapshot.gpu)
         XCTAssertNil(monitor.snapshot.ane)
         XCTAssertEqual(monitor.snapshot.powerInput, PowerInputSnapshot())
+        XCTAssertEqual(monitor.snapshot.thermal, .unknown)
     }
 }
